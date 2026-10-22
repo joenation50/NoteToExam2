@@ -2,7 +2,7 @@ import { parseModelQuestions, summarizeLocally } from "./questions";
 import type { Question } from "./types";
 
 const ENDPOINT =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent";
 
 function apiKey() {
   return (import.meta.env.VITE_GEMINI_API_KEY as string | undefined)?.trim() || "";
