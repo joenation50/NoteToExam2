@@ -79,9 +79,9 @@ export function Dashboard() {
         me: me!, canGenerate, addCredits, recordGeneration, refundCredits, uploadNote, saveSet, touchStreak, onProgress: setProgress,
       });
 
-      // SAFETY CHECK: Ensure the AI actually generated questions
-      if (!result.set || !result.set.questions || !Array.isArray(result.set.questions)) {
-        throw new Error("The AI failed to generate valid questions. Please try a clearer image or PDF.");
+      // SAFETY CHECK: Prevent crash if AI fails
+      if (!result || !result.set || !result.set.id) {
+        throw new Error("The AI failed to create a valid pack. Please try another file.");
       }
 
       toast(result.engine === "local" ? "Pack ready (offline)." : "Pack generated successfully!", "ok");
