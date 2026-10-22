@@ -19,9 +19,7 @@ export function Cbt() {
   const savedSet = db.sets.find((s) => s.id === id && s.ownerId === me?.id);
   
   const bank = useMemo(() => {
-    if (isCustomTest) {
-      return shuffle(customQuestions);
-    }
+    if (isCustomTest) return shuffle(customQuestions);
     return savedSet ? shuffle(savedSet.questions.filter((q) => q.format === "mcq")) : [];
   }, [isCustomTest, customQuestions, savedSet?.id]);
 
@@ -38,122 +36,63 @@ export function Cbt() {
 
   useEffect(() => {
     if (!isCustomTest) return;
-
     const generateTest = async () => {
       setLoading(true);
       setError("");
       try {
         const subjectsStr = sessionStorage.getItem("cbt_subjects");
-        if (!subjectsStr) throw new Error("No subjects selected. Go back and pick subjects.");
+        if (!subjectsStr) throw new Error("No subjects selected.");
         const subjects: string[] = JSON.parse(subjectsStr);
-        
         const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-        if (!apiKey) throw new Error("Gemini API key missing. Check environment variables.");
+        if (!apiKey) throw new Error("Gemini API key missing.");
 
         const questionsPerSubject = Math.floor(40 / subjects.length);
         
-        const prompt = `Generate exactly ${questionsPerSubject} multiple-choice questions for EACH of the following subjects: ${subjects.join(', ')}. 
-        Return the response ONLY as a valid JSON array. Do not include markdown formatting like \`\`\`json.
-        Each object in the array must have this exact structure:
-        {
-          "subject": "Subject Name",
-          "prompt": "The question text?",
-          "options": ["Option A", "Option B", "Option C", "Option D"],
-          "answer": "Option A",
-          "explanation": "Why Option A is correct.",
-          "format": "mcq",
-          "topic": "General"
-        }`;
+        const prompt = `You are a strict Nigerian university professor setting an exam for ${subjects.join(' and ')}.
+        Generate exactly ${questionsPerSubject} multiple-choice questions for EACH subject.
+        Return ONLY a JSON array. Do not include markdown.
+        Each object must have: { "subject": "...", "prompt": "...", "options": ["A","B","C","D"], "answer": "B", "explanation": "...", "format": "mcq", "topic": "..." }`;
 
-        // RETRY LOGIC FOR 503 HIGH DEMAND
         let response;
         let retries = 3;
         while (retries > 0) {
           response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: prompt }] }],
-              generationConfig: { temperature: 0.7 }
-            })
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7 } })
           });
-
-          if (response.ok) break; // Success!
-
-          const errData = await response.json();
+          if (response.ok) break;
           if (response.status === 503 || response.status === 429) {
-            // Server busy or rate limited, wait 2s and retry
             await new Promise(res => setTimeout(res, 2000));
             retries--;
           } else {
-            // Other errors (like 404 model not found) -> fail immediately
-            throw new Error(errData.error?.message || "Gemini API failed.");
+            const err = await response.json();
+            throw new Error(err.error?.message || "Gemini failed.");
           }
         }
 
-        if (!response || !response.ok) {
-          throw new Error("Gemini is currently experiencing high demand. Please try again in a few minutes.");
-        }
-
+        if (!response || !response.ok) throw new Error("Gemini is busy. Try again.");
         const data = await response.json();
+        if (!data.candidates || !data.candidates[0]?.content) throw new Error("Empty AI result.");
         
-        if (!data.candidates || !data.candidates[0] || !data.candidates[0].content) {
-          throw new Error("Gemini returned an empty result. Try different subjects.");
-        }
-
         let textResponse = data.candidates[0].content.parts[0].text;
-        
         textResponse = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
         const startIdx = textResponse.indexOf('[');
         const endIdx = textResponse.lastIndexOf(']');
-        if (startIdx !== -1 && endIdx !== -1) {
-          textResponse = textResponse.substring(startIdx, endIdx + 1);
-        }
+        if (startIdx !== -1 && endIdx !== -1) textResponse = textResponse.substring(startIdx, endIdx + 1);
 
-        let parsed;
-        try {
-          parsed = JSON.parse(textResponse);
-        } catch (parseErr) {
-          throw new Error("The AI returned an invalid format. Please try again.");
-        }
-        
-        if (!Array.isArray(parsed) || parsed.length === 0) {
-          throw new Error("The AI failed to generate questions. Please try again.");
-        }
+        const parsed = JSON.parse(textResponse);
+        if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("No questions generated.");
 
-        const formattedQuestions = parsed.map((q: any, index: number) => ({
-          ...q,
-          id: `q-${index}-${Date.now()}`
-        }));
-
-        setCustomQuestions(formattedQuestions);
+        setCustomQuestions(parsed.map((q: any, index: number) => ({ ...q, id: `q-${index}-${Date.now()}` })));
       } catch (err: any) {
         setError(err.message || "Failed to generate test.");
       } finally {
         setLoading(false);
       }
     };
-
     generateTest();
   }, [isCustomTest]);
-
-  useEffect(() => {
-    if (isCustomTest && !done && bank.length > 0) {
-      localStorage.setItem(`cbt_progress_${id}`, JSON.stringify({ i, answers, secs }));
-    }
-  }, [i, answers, secs, isCustomTest, id, done, bank.length]);
-
-  useEffect(() => {
-    if (isCustomTest) {
-      const saved = localStorage.getItem(`cbt_progress_${id}`);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        setI(parsed.i || 0);
-        setAnswers(parsed.answers || {});
-        setSecs(parsed.secs || 0);
-      }
-    }
-  }, [id, isCustomTest]);
 
   useEffect(() => {
     if (loading || error || !bank.length || done) return;
@@ -184,18 +123,29 @@ export function Cbt() {
   function finish() {
     if (!me) return;
     if (savedSet) saveAttempt({ setId: savedSet.id, ownerId: me.id, score: bank.filter((x) => answers[x.id] === x.answer).length, total: bank.length, startedAt: Date.now() - secs * 1000, finishedAt: Date.now(), answers });
-    if (isCustomTest) localStorage.removeItem(`cbt_progress_${id}`);
     touchStreak(); setDone(true);
   }
 
   async function share() {
     if (!shareEl) return;
-    const dataUrl = await toPng(shareEl, { pixelRatio: 2 });
-    const blob = await (await fetch(dataUrl)).blob();
-    const file = new File([blob], "notetoexam-win.png", { type: "image/png" });
-    const text = `I scored ${score}/${bank.length} on NoteToExam.`;
-    if (navigator.share && navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], text, title: "NoteToExam" });
-    else window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank");
+    try {
+      const dataUrl = await toPng(shareEl, { pixelRatio: 2 });
+      const blob = await (await fetch(dataUrl)).blob();
+      const file = new File([blob], "notetoexam-result.png", { type: "image/png" });
+      const text = `I scored ${score}/${bank.length} on NoteToExam! Built by PrimeWebDesigns.`;
+      
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], text, title: "NoteToExam Result" });
+      } else {
+        // Fallback to download if sharing isn't supported
+        const link = document.createElement("a");
+        link.href = dataUrl;
+        link.download = "notetoexam-result.png";
+        link.click();
+      }
+    } catch (err) {
+      console.error("Share failed", err);
+    }
   }
 
   if (done) {
@@ -204,12 +154,22 @@ export function Cbt() {
       <div className="px-5 pt-6 pb-24">
         <Seo title="CBT result — NoteToExam" />
         <h1 className="font-display text-3xl font-bold">Sitting complete.</h1>
-        <div ref={setShareEl} className="mt-5 rounded-[28px] overflow-hidden relative text-off p-6 bg-ink" style={{ backgroundImage: "url(/images/share-bg.png)", backgroundSize: "cover" }}>
-          <p className="font-display text-[11px] tracking-[0.22em] uppercase text-terra">NoteToExam</p>
-          <p className="font-display text-5xl font-bold mt-4">{pct}%</p>
-          <p className="mt-2 text-white/70">{score} of {bank.length}</p>
+        <p className="text-ink/50 mt-1">Time taken: {fmtClock(secs)}</p>
+        
+        {/* CUSTOM SHARE CARD */}
+        <div ref={setShareEl} className="mt-5 rounded-[28px] overflow-hidden relative text-off p-6 bg-ink flex flex-col items-center justify-center text-center shadow-2xl">
+          <p className="font-display text-[11px] tracking-[0.22em] uppercase text-terra mb-2">NoteToExam</p>
+          <p className="font-display text-6xl font-bold mb-2">{pct}%</p>
+          <p className="text-white/60">Score: {score} / {bank.length}</p>
+          <p className="text-white/60">Time: {fmtClock(secs)}</p>
+          
+          <div className="mt-6 pt-4 border-t border-white/10 w-full flex flex-col items-center">
+            <p className="font-display font-bold text-lg">{me?.name || "Student"}</p>
+            <p className="text-xs text-terra mt-1">Built by PrimeWebDesigns</p>
+          </div>
         </div>
-        <button type="button" onClick={() => void share()} className="press mt-4 w-full rounded-full bg-sage text-ink font-display font-bold py-3">Share your win</button>
+        
+        <button type="button" onClick={() => void share()} className="press mt-4 w-full rounded-full bg-sage text-ink font-display font-bold py-3">Share Result</button>
         <button type="button" onClick={() => nav(`/app`)} className="press mt-2 w-full rounded-full bg-ink text-off font-display font-bold py-3">Back to Dashboard</button>
       </div>
     );
@@ -220,9 +180,10 @@ export function Cbt() {
       <Seo title="CBT Simulator — NoteToExam" />
       <div className="flex items-center justify-between">
         <p className="font-display text-sm text-ink/50">{i + 1} / {bank.length}</p>
-        <p className="font-display font-bold tabular-nums">{fmtClock(duration ? remaining : secs)}</p>
+        <p className="font-display font-bold tabular-nums text-terra">{fmtClock(duration ? remaining : secs)}</p>
       </div>
       <div className="h-1.5 bg-ink/10 rounded-full mt-3"><div className="h-full bg-terra rounded-full" style={{ width: `${((i + (picked ? 1 : 0)) / bank.length) * 100}%` }} /></div>
+      
       <h1 className="font-display text-xl font-bold mt-6 leading-snug">{q.prompt}</h1>
       <div className="mt-5 space-y-2">
         {opts.map((o, idx) => {
@@ -230,6 +191,13 @@ export function Cbt() {
           return <button key={o} type="button" onClick={() => choose(o)} className={`press w-full text-left rounded-2xl bg-white px-4 py-4 font-display font-semibold ${state}`}><span className="text-terra mr-2">{String.fromCharCode(65 + idx)}.</span>{o}</button>;
         })}
       </div>
+
+      <div className="mt-6 flex gap-2">
+        <button type="button" onClick={finish} className="press w-full rounded-xl bg-gray-200 text-ink/70 font-display font-bold py-3 text-sm">
+          Submit Test Early
+        </button>
+      </div>
+
       {picked && (
         <div className="mt-4 rounded-[24px] bg-ink text-off p-4 mb-8">
           <p className="font-display font-bold">{picked === q.answer ? "Correct" : "Not this one"}</p>
