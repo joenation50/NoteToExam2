@@ -75,12 +75,17 @@ export function Dashboard() {
 
     setBusy(true);
     try {
-      const { set, engine } = await processNoteFile(file, {
+      const result = await processNoteFile(file, {
         me: me!, canGenerate, addCredits, recordGeneration, refundCredits, uploadNote, saveSet, touchStreak, onProgress: setProgress,
       });
-      // FIX #26: Success Toast
-      toast(engine === "local" ? "Pack ready (offline mode)." : "Pack generated successfully!", "ok");
-      nav(`/app/library/${set.id}`);
+
+      // SAFETY CHECK: Ensure the AI actually generated questions
+      if (!result.set || !result.set.questions || !Array.isArray(result.set.questions)) {
+        throw new Error("The AI failed to generate valid questions. Please try a clearer image or PDF.");
+      }
+
+      toast(result.engine === "local" ? "Pack ready (offline)." : "Pack generated successfully!", "ok");
+      nav(`/app/library/${result.set.id}`);
     } catch (err) {
       toast(err instanceof Error ? err.message : "Could not read file.", "err");
     } finally {
@@ -109,7 +114,6 @@ export function Dashboard() {
         <Stat label="CBT average" value={cbtAvg == null ? "—" : `${cbtAvg}%`} />
       </div>
 
-      {/* EXAM COUNTDOWN */}
       <div className="mt-4 rounded-[24px] bg-white p-4 border border-ink/5 shadow-sm">
         <div className="flex items-center justify-between">
           <h2 className="font-display font-bold">Exam Countdown</h2>
@@ -119,7 +123,6 @@ export function Dashboard() {
           <input type="date" className="mt-2 w-full p-3 rounded-xl border border-ink/10 bg-off font-display text-sm" onChange={(e) => { setExamDate(e.target.value); localStorage.setItem("nte_exam_date", e.target.value); }} />
         ) : (
           <div className="mt-3 flex items-center justify-between">
-            {/* FIX #23: Readable Date Format */}
             <p className="font-display font-bold text-lg">{new Date(examDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</p>
             <button onClick={() => { setExamDate(""); localStorage.removeItem("nte_exam_date"); }} className="text-xs text-red-500 font-bold p-2">Clear</button>
           </div>
