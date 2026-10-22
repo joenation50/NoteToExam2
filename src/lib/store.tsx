@@ -8,7 +8,7 @@ import {
   signOut, 
   onAuthStateChanged,
   GoogleAuthProvider,
-  signInWithPopup // CHANGED TO POPUP
+  signInWithPopup
 } from "firebase/auth";
 import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
 import { sha256 } from "./crypto";
@@ -92,7 +92,7 @@ export interface StoreApi {
   login: (email: string, password: string) => Promise<User>;
   googleContinue: () => Promise<void>;
   logout: () => Promise<void>;
-  updateMe: (patch: Partial<User>) => void;
+  updateMe: (patch: Partial<User>) => Promise<void>; // Updated to Promise
   bumpStudy: (seconds: number) => void;
   touchStreak: () => void;
   addCredits: (userId: string, delta: number) => Promise<void>;
@@ -173,7 +173,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         console.error("Auth listener error:", error);
       } finally {
-        setReady(true);
+        setReady(true); 
       }
     });
     return () => unsubscribe();
@@ -306,7 +306,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     persistSession(null);
   };
 
-  const updateMe = (patch: Partial<User>) => { if (me) { Object.assign(me, patch); commit(); } };
+  // UPDATED: Syncs to Firebase
+  const updateMe = async (patch: Partial<User>) => {
+    if (!me) return;
+    Object.assign(me, patch); 
+    commit();
+    try {
+      await updateDoc(doc(firestore, "profiles", me.id), patch);
+    } catch (error) {
+      console.error("Failed to save profile to cloud:", error);
+    }
+  };
+
   const bumpStudy = (seconds: number) => { if (!me) return; const k = todayKey(); me.studySeconds = { ...me.studySeconds, [k]: (me.studySeconds[k] || 0) + seconds }; commit(); };
   const touchStreak = () => { if (!me) return; const k = todayKey(); if (me.lastStudyDay === k) return; const y = new Date(); y.setDate(y.getDate() - 1); const yk = todayKey(y); me.streak = me.lastStudyDay === yk ? me.streak + 1 : 1; me.lastStudyDay = k; commit(); };
   const subscribePlan = (plan: StudentPlan) => { if (!me) return; const meta = planMeta(plan); me.studentPlan = plan; me.credits += meta.credits; me.chatCap = meta.chats; me.devicesAllowed = meta.devices; commit(); };
