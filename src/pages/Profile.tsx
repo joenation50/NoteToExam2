@@ -1,235 +1,273 @@
-import { Camera, Pencil } from "lucide-react";
+import { Camera, Pencil, MessageSquare, Users, BookOpen, Settings as SettingsIcon, Award, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Seo } from "../components/Seo";
 import { formatMoney, LECTURER_PLANS, MIN_WITHDRAWAL_NGN, periodLabel, STUDENT_PLANS } from "../lib/pricing";
-import { startPaystack } from "../lib/paystack";
 import { useStore } from "../lib/store";
 import { useRef, useState } from "react";
 
 export function Profile() {
-  const { me, currency, subscribePlan, subscribeLecturer, requestPayout, toast, updateMe } = useStore();
+  const { me, currency, requestPayout, toast, updateMe } = useStore();
   const [amount, setAmount] = useState(String(MIN_WITHDRAWAL_NGN));
   const [editing, setEditing] = useState(false);
+  const [payingPlan, setPayingPlan] = useState<{ name: string; price: string } | null>(null);
   const picRef = useRef<HTMLInputElement>(null);
-  if (!me) return null;
+
+  // SAFETY CHECK
+  if (!me) {
+    return <div className="px-5 pt-20 text-center font-display">Loading profile...</div>;
+  }
+
   const user = me;
   const invite = `${window.location.origin}/auth?ref=${user.referralCode}`;
   const stageLabel =
     me.learningStage === "primary" ? "Primary" : me.learningStage === "secondary" ? "Secondary" : "University";
 
-  function payPlan(naira: number, apply: () => void) {
-    if (naira === 0) {
-      apply();
-      toast("Plan updated.", "ok");
-      return;
-    }
-    startPaystack({
-      email: user.email,
-      amountNaira: naira,
-      onSuccess: () => {
-        apply();
-        toast("Plan unlocked.", "ok");
-      },
-    }).catch((e) => {
-      if (e instanceof Error && e.message === "closed") return;
-      apply();
-      toast("Plan applied on this device.", "ok");
+  function handleSelectPlan(planName: string, naira: number) {
+    if (naira === 0) return toast("Free plan is already active.", "ok");
+    
+    // Show the manual bank transfer modal instead of auto-applying
+    setPayingPlan({
+      name: planName,
+      price: formatMoney(naira, "NGN"),
     });
   }
 
   return (
-    <div className="px-5 pt-5">
+    <div className="px-5 pt-5 pb-24">
       <Seo title="Profile — NoteToExam" />
-      <div className="bg-white rounded-[28px] p-5">
-        <div className="flex items-start gap-4">
+      
+      {/* HEADER CARD */}
+      <div className="bg-white rounded-[32px] p-6 shadow-sm border border-ink/5">
+        <div className="flex items-center gap-5">
           <button
             type="button"
-            className="press relative h-20 w-20 rounded-full overflow-hidden bg-ink/5 shrink-0 ring-2 ring-ink/10"
+            className="press relative h-24 w-24 rounded-full overflow-hidden bg-ink/5 shrink-0 ring-4 ring-off-white"
             onClick={() => picRef.current?.click()}
-            aria-label="Upload profile picture"
           >
             {me.avatar ? (
               <img src={me.avatar} alt="" className="h-full w-full object-cover" />
             ) : (
-              <span className="font-display text-2xl font-bold text-terra grid place-items-center h-full">
+              <span className="font-display text-4xl font-bold text-terra grid place-items-center h-full bg-terra/10">
                 {(me.name || "?").slice(0, 1).toUpperCase()}
               </span>
             )}
-            <span className="absolute bottom-0 inset-x-0 h-7 bg-ink/70 grid place-items-center">
-              <Camera size={12} className="text-off" />
+            <span className="absolute bottom-0 inset-x-0 h-8 bg-ink/80 grid place-items-center">
+              <Camera size={14} className="text-off" />
             </span>
           </button>
-          <input
-            ref={picRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              e.target.value = "";
-              if (!f) return;
-              const r = new FileReader();
-              r.onload = () => {
-                updateMe({ avatar: String(r.result) });
-                toast("Photo updated.", "ok");
-              };
-              r.readAsDataURL(f);
-            }}
-          />
+          
           <div className="flex-1 min-w-0">
-            <h1 className="font-display text-2xl font-bold leading-tight">{me.name}</h1>
+            <h1 className="font-display text-2xl font-bold leading-tight truncate">{me.name}</h1>
             <p className="text-ink/50 text-sm truncate">{me.email}</p>
             <button
               type="button"
               onClick={() => setEditing(true)}
-              className="press mt-2 inline-flex items-center gap-1 rounded-full bg-ink text-off font-display text-xs font-bold px-3 py-1.5"
+              className="press mt-3 inline-flex items-center gap-1.5 rounded-full bg-ink/5 text-ink font-display text-xs font-bold px-3 py-2"
             >
-              <Pencil size={12} /> Edit profile
+              <Pencil size={12} /> Edit Profile
             </button>
           </div>
         </div>
-        <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
+        
+        <input
+          ref={picRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = "";
+            if (!f) return;
+            const r = new FileReader();
+            r.onload = () => {
+              updateMe({ avatar: String(r.result) });
+              toast("Photo updated.", "ok");
+            };
+            r.readAsDataURL(f);
+          }}
+        />
+
+        <dl className="mt-6 grid grid-cols-2 gap-4 text-sm pt-6 border-t border-ink/5">
           <Info label="Age" value={me.age || "—"} />
-          <Info label="School / University" value={me.school || "—"} />
-          <Info label="Class / Level" value={me.classLevel || stageLabel} />
+          <Info label="School" value={me.school || "—"} />
+          <Info label="Level" value={me.classLevel || stageLabel} />
           <Info label="Department" value={me.department || me.courseFocus || "—"} />
+          <Info label="Matric No." value={me.matric || "—"} />
+          <Info label="Role" value={me.role === "lecturer" ? "Lecturer" : "Student"} />
         </dl>
       </div>
-      <div className="grid grid-cols-3 gap-2 mt-4">
-        <Chip label="Credits" value={String(me.credits)} />
-        <Chip label="Points" value={String(me.knowledgePoints)} />
-        <Chip label="Streak" value={String(me.streak)} />
+
+      {/* STATS ROW */}
+      <div className="grid grid-cols-3 gap-3 mt-4">
+        <div className="bg-gradient-to-br from-ink to-slate-800 rounded-[24px] p-4 text-off shadow-md">
+          <p className="text-[10px] uppercase tracking-widest text-terra font-bold">Credits</p>
+          <p className="font-display font-bold text-2xl mt-1">{me.credits}</p>
+        </div>
+        <div className="bg-white rounded-[24px] p-4 border border-ink/5 shadow-sm">
+          <p className="text-[10px] uppercase tracking-widest text-ink/40 font-bold">Points</p>
+          <p className="font-display font-bold text-2xl mt-1">{me.knowledgePoints}</p>
+        </div>
+        <div className="bg-white rounded-[24px] p-4 border border-ink/5 shadow-sm">
+          <p className="text-[10px] uppercase tracking-widest text-ink/40 font-bold">Streak</p>
+          <p className="font-display font-bold text-2xl mt-1 text-terra">{me.streak}🔥</p>
+        </div>
       </div>
 
-      {editing && (
-        <div className="fixed inset-0 z-50 bg-ink/50 flex items-end justify-center" onClick={() => setEditing(false)}>
-          <form
-            className="bg-off w-full max-w-md rounded-t-[32px] p-6 space-y-3"
-            onClick={(e) => e.stopPropagation()}
-            onSubmit={(e) => {
-              e.preventDefault();
-              const fd = new FormData(e.currentTarget);
-              updateMe({
-                name: String(fd.get("name") || me.name),
-                age: String(fd.get("age") || ""),
-                school: String(fd.get("school") || ""),
-                classLevel: String(fd.get("classLevel") || ""),
-                department: String(fd.get("department") || ""),
-                matric: String(fd.get("matric") || me.matric),
-              });
-              toast("Profile saved.", "ok");
-              setEditing(false);
-            }}
-          >
-            <h2 className="font-display text-xl font-bold">Edit profile</h2>
-            <input name="name" defaultValue={me.name} className="w-full rounded-2xl bg-white px-4 py-3" placeholder="Name" />
-            <input name="age" defaultValue={me.age} className="w-full rounded-2xl bg-white px-4 py-3" placeholder="Age" />
-            <input name="school" defaultValue={me.school} className="w-full rounded-2xl bg-white px-4 py-3" placeholder="School / University" />
-            <input name="classLevel" defaultValue={me.classLevel} className="w-full rounded-2xl bg-white px-4 py-3" placeholder="Class / Level (e.g. SS2, 200 Level)" />
-            <input name="department" defaultValue={me.department} className="w-full rounded-2xl bg-white px-4 py-3" placeholder="Department" />
-            <input name="matric" defaultValue={me.matric} className="w-full rounded-2xl bg-white px-4 py-3" placeholder="Matric" />
-            <button className="press w-full rounded-full bg-ink text-off font-display font-bold py-3">Save</button>
-            <button type="button" className="press w-full text-sm text-ink/50" onClick={() => setEditing(false)}>Cancel</button>
-          </form>
-        </div>
-      )}
-
+      {/* QUICK LINKS */}
       <section className="mt-6">
-        <h2 className="font-display font-bold text-lg">Student plans</h2>
-        <div className="mt-3 space-y-2">
+        <h2 className="font-display font-bold text-lg mb-3">Quick Links</h2>
+        <div className="grid grid-cols-2 gap-3">
+          <Link to="/app/messages" className="press flex items-center gap-3 bg-white p-4 rounded-2xl border border-ink/5 shadow-sm">
+            <div className="h-10 w-10 rounded-full bg-terra/10 grid place-items-center text-terra"><MessageSquare size={18} /></div>
+            <span className="font-display font-bold">Messages</span>
+          </Link>
+          <Link to="/app/wall" className="press flex items-center gap-3 bg-white p-4 rounded-2xl border border-ink/5 shadow-sm">
+            <div className="h-10 w-10 rounded-full bg-sage/20 grid place-items-center text-sage-deep"><Users size={18} /></div>
+            <span className="font-display font-bold">Campus Wall</span>
+          </Link>
+          <Link to="/app/library" className="press flex items-center gap-3 bg-white p-4 rounded-2xl border border-ink/5 shadow-sm">
+            <div className="h-10 w-10 rounded-full bg-blue-100 grid place-items-center text-blue-600"><BookOpen size={18} /></div>
+            <span className="font-display font-bold">Library</span>
+          </Link>
+          <Link to="/app/settings" className="press flex items-center gap-3 bg-white p-4 rounded-2xl border border-ink/5 shadow-sm">
+            <div className="h-10 w-10 rounded-full bg-gray-100 grid place-items-center text-gray-600"><SettingsIcon size={18} /></div>
+            <span className="font-display font-bold">Settings</span>
+          </Link>
+        </div>
+      </section>
+
+      {/* STUDENT PLANS */}
+      <section className="mt-8">
+        <h2 className="font-display font-bold text-lg mb-3">Student Plans</h2>
+        <div className="space-y-3">
           {STUDENT_PLANS.map((p) => (
             <button
               key={p.id}
               type="button"
-              onClick={() => payPlan(p.naira, () => subscribePlan(p.id))}
-              className={`press w-full text-left rounded-[22px] p-4 ${me.studentPlan === p.id ? "bg-ink text-off" : "bg-white"}`}
+              onClick={() => handleSelectPlan(p.name, p.naira)}
+              className={`press w-full text-left rounded-[24px] p-5 border shadow-sm transition-all ${
+                me.studentPlan === p.id ? "bg-ink text-off border-ink" : "bg-white border-ink/5 hover:border-terra/50"
+              }`}
             >
-              <div className="flex justify-between">
-                <p className="font-display font-bold">{p.name}</p>
-                <p className="font-display font-bold">
-                  {formatMoney(p.naira, currency)}
-                  <span className="text-xs opacity-60">{periodLabel(p.period)}</span>
-                </p>
+              <div className="flex justify-between items-start">
+                <div>
+                  <p className="font-display font-bold text-lg">{p.name} {me.studentPlan === p.id && "✓"}</p>
+                  <p className={`text-sm mt-1 ${me.studentPlan === p.id ? "text-white/60" : "text-ink/55"}`}>{p.blurb}</p>
+                </div>
+                <div className="text-right shrink-0 ml-4">
+                  <p className="font-display font-bold text-xl">{formatMoney(p.naira, currency)}</p>
+                  <p className={`text-xs ${me.studentPlan === p.id ? "text-terra" : "text-ink/40"}`}>{periodLabel(p.period)}</p>
+                </div>
               </div>
-              <p className={`text-sm mt-1 ${me.studentPlan === p.id ? "text-white/60" : "text-ink/55"}`}>{p.blurb}</p>
             </button>
           ))}
         </div>
       </section>
 
-      <section id="lecturer" className="mt-8 scroll-mt-20">
-        <h2 className="font-display font-bold text-lg">Lecturer plans</h2>
-        <div className="mt-3 space-y-2">
+      {/* LECTURER PLANS */}
+      <section className="mt-8">
+        <h2 className="font-display font-bold text-lg mb-3">Lecturer Plans</h2>
+        <div className="space-y-3">
           {LECTURER_PLANS.map((p) => (
             <button
               key={p.id}
               type="button"
-              onClick={() => payPlan(p.naira, () => subscribeLecturer(p.id))}
-              className={`press w-full text-left rounded-[22px] p-4 ${me.lecturerPlan === p.id && me.role === "lecturer" ? "bg-sage/30" : "bg-white"}`}
+              onClick={() => handleSelectPlan(p.name, p.naira)}
+              className={`press w-full text-left rounded-[24px] p-5 border shadow-sm transition-all ${
+                me.lecturerPlan === p.id && me.role === "lecturer" ? "bg-sage/20 text-ink border-sage" : "bg-white border-ink/5 hover:border-sage/50"
+              }`}
             >
-              <div className="flex justify-between">
-                <p className="font-display font-bold">{p.name}</p>
-                <p className="font-display font-bold">
-                  {formatMoney(p.naira, currency)}
-                  <span className="text-xs opacity-60">{periodLabel(p.period)}</span>
-                </p>
+              <div className="flex justify-between items-start">
+                <div>
+                  <p className="font-display font-bold text-lg">{p.name} {me.lecturerPlan === p.id && "✓"}</p>
+                  <p className="text-sm text-ink/55 mt-1">{p.uploads} uploads allowed</p>
+                </div>
+                <div className="text-right shrink-0 ml-4">
+                  <p className="font-display font-bold text-xl">{formatMoney(p.naira, currency)}</p>
+                  <p className="text-xs text-ink/40">{periodLabel(p.period)}</p>
+                </div>
               </div>
-              <p className="text-sm text-ink/55 mt-1">{p.uploads} uploads · student {p.studentPays}c · you {p.lecturerGets}c</p>
             </button>
           ))}
         </div>
       </section>
 
-      <section className="mt-8 bg-white rounded-[24px] p-4">
-        <h2 className="font-display font-bold">Withdrawals</h2>
-        <p className="text-sm text-ink/55 mt-1">
-          Balance {formatMoney(me.lecturerNaira, "NGN")} · minimum {formatMoney(MIN_WITHDRAWAL_NGN, "NGN")}
-        </p>
-        <div className="flex gap-2 mt-3">
-          <input
-            className="flex-1 rounded-2xl bg-off px-3 py-2"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            type="number"
-            min={MIN_WITHDRAWAL_NGN}
-          />
-          <button
-            type="button"
-            className="press rounded-full bg-ink text-off font-display font-bold px-4"
-            onClick={() => {
-              try {
-                requestPayout(Number(amount));
-                toast("Payout queued.", "ok");
-              } catch (e) {
-                toast(e instanceof Error ? e.message : "Could not request.", "err");
-              }
-            }}
-          >
-            Request
-          </button>
+      {/* WITHDRAWALS */}
+      <section className="mt-8 bg-white rounded-[24px] p-5 border border-ink/5 shadow-sm">
+        <h2 className="font-display font-bold text-lg">Withdrawals</h2>
+        <p className="text-sm text-ink/55 mt-1">Balance: <span className="font-bold text-ink">{formatMoney(me.lecturerNaira, "NGN")}</span></p>
+        <div className="flex gap-2 mt-4">
+          <input className="flex-1 rounded-xl bg-off px-4 py-3 font-display font-bold border border-ink/10 outline-none" value={amount} onChange={(e) => setAmount(e.target.value)} type="number" />
+          <button type="button" className="press rounded-xl bg-ink text-off font-display font-bold px-6" onClick={() => {
+              try { requestPayout(Number(amount)); toast("Payout queued.", "ok"); } 
+              catch (e) { toast(e instanceof Error ? e.message : "Error", "err"); }
+            }}>Request</button>
         </div>
       </section>
 
-      <section className="mt-6 bg-ink text-off rounded-[24px] p-4">
-        <p className="font-display text-xs uppercase tracking-widest text-terra">Referrals</p>
-        <p className="font-display text-xl font-bold mt-1">500 credits on signup</p>
-        <p className="text-sm text-white/60 mt-1 break-all">{invite}</p>
-        <button
-          type="button"
-          className="press mt-3 rounded-full bg-terra text-ink font-display font-bold px-4 py-2 text-sm"
-          onClick={() => {
-            void navigator.clipboard.writeText(invite);
-            toast("Invite copied.", "ok");
-          }}
-        >
-          Copy invite
-        </button>
+      {/* REFERRALS */}
+      <section className="mt-6 bg-ink text-off rounded-[24px] p-6 shadow-lg relative overflow-hidden">
+        <div className="absolute -right-4 -top-4 opacity-10"><Award size={120} /></div>
+        <p className="font-display text-[10px] uppercase tracking-[0.2em] text-terra font-bold relative z-10">Referrals</p>
+        <p className="font-display text-2xl font-bold mt-1 relative z-10">Earn 500 credits</p>
+        <div className="mt-4 bg-white/10 rounded-xl p-3 flex items-center justify-between gap-3 relative z-10">
+          <p className="text-sm text-white/80 font-mono truncate">{invite}</p>
+          <button type="button" className="press shrink-0 rounded-lg bg-terra text-ink font-display text-xs font-bold px-4 py-2" onClick={() => { void navigator.clipboard.writeText(invite); toast("Copied!", "ok"); }}>Copy</button>
+        </div>
       </section>
 
-      <div className="mt-6 grid grid-cols-2 gap-2">
-        <Link to="/app/messages" className="press rounded-2xl bg-white p-4 font-display font-bold">Messages</Link>
-        <Link to="/app/wall" className="press rounded-2xl bg-white p-4 font-display font-bold">Campus Wall</Link>
-      </div>
+      {/* EDIT PROFILE MODAL */}
+      {editing && (
+        <div className="fixed inset-0 z-50 bg-ink/60 backdrop-blur-sm flex items-end justify-center" onClick={() => setEditing(false)}>
+          <form className="bg-white w-full max-w-md rounded-t-[32px] p-6 space-y-3 shadow-2xl animate-in slide-in-from-bottom-8" onClick={(e) => e.stopPropagation()} onSubmit={(e) => {
+              e.preventDefault();
+              const fd = new FormData(e.currentTarget);
+              updateMe({ name: String(fd.get("name") || me.name), age: String(fd.get("age") || ""), school: String(fd.get("school") || ""), classLevel: String(fd.get("classLevel") || ""), department: String(fd.get("department") || ""), matric: String(fd.get("matric") || me.matric) });
+              toast("Profile saved.", "ok");
+              setEditing(false);
+            }}>
+            <h2 className="font-display text-2xl font-bold text-center mb-6">Edit Profile</h2>
+            <input name="name" defaultValue={me.name} className="w-full rounded-xl bg-off border border-ink/10 px-4 py-3" placeholder="Full Name" />
+            <input name="age" defaultValue={me.age} className="w-full rounded-xl bg-off border border-ink/10 px-4 py-3" placeholder="Age" />
+            <input name="school" defaultValue={me.school} className="w-full rounded-xl bg-off border border-ink/10 px-4 py-3" placeholder="School" />
+            <input name="classLevel" defaultValue={me.classLevel} className="w-full rounded-xl bg-off border border-ink/10 px-4 py-3" placeholder="Level" />
+            <input name="department" defaultValue={me.department} className="w-full rounded-xl bg-off border border-ink/10 px-4 py-3" placeholder="Department" />
+            <input name="matric" defaultValue={me.matric} className="w-full rounded-xl bg-off border border-ink/10 px-4 py-3" placeholder="Matric" />
+            <button className="press w-full rounded-xl bg-ink text-off font-display font-bold py-4 mt-2">Save Changes</button>
+          </form>
+        </div>
+      )}
+
+      {/* MANUAL PAYMENT MODAL */}
+      {payingPlan && (
+        <div className="fixed inset-0 z-50 bg-ink/60 backdrop-blur-sm flex items-end justify-center" onClick={() => setPayingPlan(null)}>
+          <div className="bg-white w-full max-w-md rounded-t-[32px] p-6 shadow-2xl animate-in slide-in-from-bottom-8" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="font-display text-2xl font-bold">Bank Transfer</h2>
+              <button onClick={() => setPayingPlan(null)} className="p-2 bg-ink/5 rounded-full"><X size={20} /></button>
+            </div>
+            <p className="text-sm text-ink/50 mb-4">To upgrade to <b>{payingPlan.name}</b>, transfer exactly <b>{payingPlan.price}</b> to the account below. Send your receipt to WhatsApp to get credited instantly.</p>
+            
+            <div className="bg-off p-4 rounded-xl border border-ink/5 mb-6">
+              <p className="text-xs text-ink/40 font-bold uppercase mb-1">Bank Name</p>
+              <p className="font-display font-bold text-lg mb-3">Opay / Moniepoint</p>
+              <p className="text-xs text-ink/40 font-bold uppercase mb-1">Account Number</p>
+              <p className="font-display font-bold text-lg mb-3">0123456789</p>
+              <p className="text-xs text-ink/40 font-bold uppercase mb-1">Account Name</p>
+              <p className="font-display font-bold text-lg">NoteToExam Ltd</p>
+            </div>
+
+            <a 
+              href={`https://wa.me/2348012345678?text=Hello,%20I%20want%20to%20upgrade%20to%20${payingPlan.name}%20on%20NoteToExam.%20Here%20is%20my%20receipt.`} 
+              target="_blank" 
+              rel="noreferrer"
+              className="press w-full bg-[#25D366] text-white font-display font-bold py-4 rounded-xl flex items-center justify-center gap-2"
+            >
+              Send Receipt on WhatsApp
+            </a>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -237,17 +275,8 @@ export function Profile() {
 function Info({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <dt className="text-[10px] uppercase tracking-widest text-ink/40 font-display">{label}</dt>
-      <dd className="font-display font-semibold mt-0.5">{value}</dd>
-    </div>
-  );
-}
-
-function Chip({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl bg-white px-3 py-3">
-      <p className="text-[10px] uppercase tracking-widest text-ink/40 font-display">{label}</p>
-      <p className="font-display font-bold text-lg">{value}</p>
+      <dt className="text-[10px] uppercase tracking-widest text-ink/40 font-bold">{label}</dt>
+      <dd className="font-display font-semibold mt-0.5 text-ink">{value}</dd>
     </div>
   );
 }
