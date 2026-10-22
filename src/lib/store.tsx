@@ -8,7 +8,8 @@ import {
   signOut, 
   onAuthStateChanged,
   GoogleAuthProvider,
-  signInWithPopup // <-- USE POPUP
+  signInWithPopup,
+  getRedirectResult
 } from "firebase/auth";
 import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
 import { sha256 } from "./crypto";
@@ -134,7 +135,7 @@ const Ctx = createContext<StoreApi | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [tick, setTick] = useState(0);
-  const [ready, setReady] = useState(false);
+  const [ready, setReady] = useState(false); // START AS FALSE
   const [currency, setCurrency] = useState<Currency>("USD");
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [session, setSession] = useState<string | null>(() => localStorage.getItem(SESSION_KEY));
@@ -143,8 +144,46 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const l = () => setTick((n) => n + 1);
     listeners.add(l);
-    setReady(true); // INSTANT RENDER
     return () => { listeners.delete(l); };
+  }, []);
+
+  // CATCH REDIRECT RESULT
+  useEffect(() => {
+    getRedirectResult(auth).then(async (result) => {
+      if (result?.user) {
+        const firebaseUser = result.user;
+        const docRef = doc(firestore, "profiles", firebaseUser.uid);
+        const docSnap = await getDoc(docRef);
+        
+        if (!docSnap.exists()) {
+          const plan = planMeta("free");
+          await setDoc(docRef, {
+            email: firebaseUser.email,
+            name: firebaseUser.displayName || firebaseUser.email?.split("@")[0],
+            matric: "",
+            role: "student",
+            credits: plan.credits,
+          });
+        }
+        
+        const docSnapAfter = await getDoc(docRef);
+        if (docSnapAfter.exists()) {
+          const cloudData = docSnapAfter.data();
+          let localUser = db.users.find(u => u.id === firebaseUser.uid);
+          if (!localUser) {
+            localUser = { ...cloudData, id: firebaseUser.uid, sessionToken: uid("ses"), activeDeviceId: deviceId() } as User;
+            db.users.push(localUser);
+          } else {
+            localUser.credits = cloudData.credits;
+            localUser.sessionToken = uid("ses");
+          }
+          commit();
+          persistSession(localUser.sessionToken);
+        }
+      }
+    }).catch((error) => {
+      console.error("Redirect result error:", error);
+    });
   }, []);
 
   // FIREBASE AUTH LISTENER
@@ -174,7 +213,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         console.error("Auth listener error:", error);
       } finally {
-        setReady(true);
+        setReady(true); // ONLY READY AFTER FIREBASE CHECKS THE SESSION
       }
     });
     return () => unsubscribe();
@@ -264,40 +303,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const googleContinue: StoreApi["googleContinue"] = async () => {
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
-    
     try {
-      const result = await signInWithPopup(auth, provider);
-      if (result.user) {
-         const firebaseUser = result.user;
-         const docRef = doc(firestore, "profiles", firebaseUser.uid);
-         const docSnap = await getDoc(docRef);
-         
-         if (!docSnap.exists()) {
-           const plan = planMeta("free");
-           await setDoc(docRef, {
-             email: firebaseUser.email,
-             name: firebaseUser.displayName || firebaseUser.email?.split("@")[0],
-             matric: "",
-             role: "student",
-             credits: plan.credits,
-           });
-         }
-         
-         const docSnapAfter = await getDoc(docRef);
-         if (docSnapAfter.exists()) {
-           const cloudData = docSnapAfter.data();
-           let localUser = db.users.find(u => u.id === firebaseUser.uid);
-           if (!localUser) {
-             localUser = { ...cloudData, id: firebaseUser.uid, sessionToken: uid("ses"), activeDeviceId: deviceId() } as User;
-             db.users.push(localUser);
-           } else {
-             localUser.credits = cloudData.credits;
-             localUser.sessionToken = uid("ses");
-           }
-           commit();
-           persistSession(localUser.sessionToken);
-         }
-      }
+      await signInWithRedirect(auth, provider);
     } catch (error: any) {
       throw new Error(error.message || "Google sign-in failed.");
     }
