@@ -1,7 +1,7 @@
 import {
   createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode,
 } from "react";
-import { supabase } from "./supabase";
+import { account, databases, ID, Query, DATABASE_ID, PROFILES_COLLECTION_ID } from "./appwrite";
 import { sha256 } from "./crypto";
 import { deviceId, referralCode, todayKey, uid } from "./id";
 import { idbSet } from "./idb";
@@ -137,16 +137,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => { listeners.delete(l); };
   }, []);
 
-  // THE FIX FOR #5: Sync from Supabase on load
+  // CHECK APPWRITE SESSION
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data: { session: sbSession } }: any) => {
-      if (sbSession?.user) {
-        const { data: cloudProfile } = await supabase.from("profiles").select("*").eq("id", sbSession.user.id).single();
-        
-        if (cloudProfile) {
+    account.get().then(async (appwriteUser: any) => {
+      if (appwriteUser) {
+        const { documents } = await databases.listDocuments(DATABASE_ID, PROFILES_COLLECTION_ID, [Query.equal("email", appwriteUser.email)]);
+        if (documents.length > 0) {
+          const cloudProfile = documents[0];
           let localUser = db.users.find(u => u.email === cloudProfile.email);
           if (!localUser) {
-             localUser = { ...cloudProfile, sessionToken: uid("ses"), activeDeviceId: deviceId() } as User;
+             localUser = { ...cloudProfile, sessionToken: uid("ses"), activeDeviceId: deviceId() } as unknown as User;
              db.users.push(localUser);
           } else {
              localUser.credits = cloudProfile.credits;
@@ -156,8 +156,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           persistSession(localUser.sessionToken);
         }
       }
-      setReady(true);
-    });
+    }).catch(() => {}).finally(() => setReady(true));
   }, []);
 
   const toast = useCallback((message: string, tone: ToastItem["tone"] = "info") => {
@@ -194,12 +193,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const email = opts.email.trim().toLowerCase();
     if (db.users.some((u) => u.email === email)) throw new Error("Email already has an account.");
     
-    const { data: authData, error: authError } = await supabase.auth.signUp({ email, password: opts.password });
-    if (authError) throw new Error(authError.message);
+    const appwriteUser = await account.create(ID.unique(), email, opts.password, opts.name);
+    await account.createEmailPasswordSession(email, opts.password);
 
     const plan = planMeta("free");
     const user: User = {
-      id: authData.user?.id || uid("usr"), email, name: opts.name.trim() || email.split("@")[0], matric: opts.matric.trim(),
+      id: appwriteUser.$id, email, name: opts.name.trim() || email.split("@")[0], matric: opts.matric.trim(),
       passwordHash: await sha256(opts.password), role: opts.role, studentPlan: "free", lecturerPlan: "free", credits: plan.credits,
       chatsUsed: 0, chatCap: plan.chats, devicesAllowed: plan.devices, activeDeviceId: deviceId(), sessionToken: null, banned: false,
       createdAt: Date.now(), referralCode: referralCode(), referredBy: null, googleLinked: false, streak: 0, lastStudyDay: null, studySeconds: {},
@@ -207,8 +206,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       learningStage: opts.learningStage || "university", lecturerVerify: "", avatar: "", age: "", classLevel: "", department: "",
     };
     
-    await supabase.from("profiles").insert({
-      id: user.id, email: user.email, name: user.name, matric: user.matric, role: user.role, credits: user.credits
+    await databases.createDocument(DATABASE_ID, PROFILES_COLLECTION_ID, ID.unique(), {
+      email: user.email, name: user.name, matric: user.matric, role: user.role, credits: user.credits
     });
 
     db.users.push(user);
@@ -218,25 +217,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const login: StoreApi["login"] = async (email, password) => {
     const e = email.trim().toLowerCase();
-    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email: e, password });
-    
-    if (authError) {
+    try {
+      await account.createEmailPasswordSession(e, password);
+      const appwriteUser = await account.get();
+      
+      const { documents } = await databases.listDocuments(DATABASE_ID, PROFILES_COLLECTION_ID, [Query.equal("email", e)]);
+      
+      let user = db.users.find(u => u.email === e);
+      if (!user && documents.length > 0) {
+         user = { ...documents[0], sessionToken: null } as unknown as User; 
+         db.users.push(user);
+      }
+      
+      if (user) return activate(user);
+      throw new Error("User profile not found.");
+    } catch (err: any) {
       const hash = await sha256(password);
       const localUser = db.users.find((u) => u.email === e && u.passwordHash === hash);
       if (localUser) return activate(localUser);
       throw new Error("Email or password is incorrect.");
     }
-
-    const { data: profile } = await supabase.from("profiles").select("*").eq("id", authData.user.id).single();
-    let user = db.users.find(u => u.email === e);
-    
-    if (!user && profile) {
-       user = { ...profile, sessionToken: null } as User; 
-       db.users.push(user);
-    }
-    
-    if (user) return activate(user);
-    throw new Error("User profile not found.");
   };
 
   const googleContinue: StoreApi["googleContinue"] = async (email, name) => {
@@ -249,7 +249,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const logout = async () => {
     if (me) { me.sessionToken = null; commit(); }
-    await supabase.auth.signOut();
+    try { await account.deleteSession('current'); } catch {}
     persistSession(null);
   };
 
@@ -258,7 +258,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!u) return;
     u.credits = Math.max(0, u.credits + delta);
     commit();
-    await supabase.from("profiles").update({ credits: u.credits }).eq("id", userId);
+    try {
+      const { documents } = await databases.listDocuments(DATABASE_ID, PROFILES_COLLECTION_ID, [Query.equal("email", u.email)]);
+      if (documents.length > 0) {
+        await databases.updateDocument(DATABASE_ID, PROFILES_COLLECTION_ID, documents[0].$id, { credits: u.credits });
+      }
+    } catch {}
   };
 
   const updateMe = (patch: Partial<User>) => { if (me) { Object.assign(me, patch); commit(); } };
