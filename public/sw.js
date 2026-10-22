@@ -1,4 +1,4 @@
-const CACHE = "nte-v1";
+const CACHE = "nte-v2";
 const PRECACHE = ["/", "/index.html", "/favicon.svg", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
@@ -15,7 +15,21 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const req = event.request;
+  
+  // 1. Only handle GET requests
   if (req.method !== "GET") return;
+
+  // 2. DO NOT intercept Firebase Auth or API requests!
+  const url = new URL(req.url);
+  if (
+    url.pathname.startsWith("/__/auth") || 
+    url.hostname.includes("firebaseapp.com") || 
+    url.hostname.includes("googleapis.com")
+  ) {
+    return; // Let the browser handle it normally
+  }
+
+  // 3. Cache everything else
   event.respondWith(
     caches.match(req).then((hit) => {
       const live = fetch(req)
