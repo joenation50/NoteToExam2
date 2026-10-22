@@ -5,7 +5,7 @@ import { getFirestore } from "firebase/firestore";
 // Your web app's Firebase configuration
 const firebaseConfig = {
   apiKey: "AIzaSyChHPI-XFrFl_u8ycffd4xucOir6Gf3zGQ",
-  authDomain: "notetoexam.firebaseapp.com",
+  authDomain: "notetoexam.web.app",
   projectId: "notetoexam",
   storageBucket: "notetoexam.firebasestorage.app",
   messagingSenderId: "1027570273647",
