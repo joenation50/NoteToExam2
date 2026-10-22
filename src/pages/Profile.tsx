@@ -12,20 +12,18 @@ export function Profile() {
   const [payingPlan, setPayingPlan] = useState<{ name: string; price: string } | null>(null);
   const picRef = useRef<HTMLInputElement>(null);
 
-  // SAFETY CHECK
+  // 1. SAFETY CHECK
   if (!me) {
     return <div className="px-5 pt-20 text-center font-display">Loading profile...</div>;
   }
 
+  // 2. SAFE DATA ACCESS
   const user = me;
-  const invite = `${window.location.origin}/auth?ref=${user.referralCode}`;
-  const stageLabel =
-    me.learningStage === "primary" ? "Primary" : me.learningStage === "secondary" ? "Secondary" : "University";
+  const invite = `${window.location.origin}/auth?ref=${user?.referralCode || "none"}`;
+  const stageLabel = me?.learningStage === "primary" ? "Primary" : me?.learningStage === "secondary" ? "Secondary" : "University";
 
   function handleSelectPlan(planName: string, naira: number) {
     if (naira === 0) return toast("Free plan is already active.", "ok");
-    
-    // Show the manual bank transfer modal instead of auto-applying
     setPayingPlan({
       name: planName,
       price: formatMoney(naira, "NGN"),
@@ -44,11 +42,11 @@ export function Profile() {
             className="press relative h-24 w-24 rounded-full overflow-hidden bg-ink/5 shrink-0 ring-4 ring-off-white"
             onClick={() => picRef.current?.click()}
           >
-            {me.avatar ? (
+            {me?.avatar ? (
               <img src={me.avatar} alt="" className="h-full w-full object-cover" />
             ) : (
               <span className="font-display text-4xl font-bold text-terra grid place-items-center h-full bg-terra/10">
-                {(me.name || "?").slice(0, 1).toUpperCase()}
+                {(me?.name || "?").slice(0, 1).toUpperCase()}
               </span>
             )}
             <span className="absolute bottom-0 inset-x-0 h-8 bg-ink/80 grid place-items-center">
@@ -57,8 +55,8 @@ export function Profile() {
           </button>
           
           <div className="flex-1 min-w-0">
-            <h1 className="font-display text-2xl font-bold leading-tight truncate">{me.name}</h1>
-            <p className="text-ink/50 text-sm truncate">{me.email}</p>
+            <h1 className="font-display text-2xl font-bold leading-tight truncate">{me?.name || "Student"}</h1>
+            <p className="text-ink/50 text-sm truncate">{me?.email || "No email"}</p>
             <button
               type="button"
               onClick={() => setEditing(true)}
@@ -88,12 +86,12 @@ export function Profile() {
         />
 
         <dl className="mt-6 grid grid-cols-2 gap-4 text-sm pt-6 border-t border-ink/5">
-          <Info label="Age" value={me.age || "—"} />
-          <Info label="School" value={me.school || "—"} />
-          <Info label="Level" value={me.classLevel || stageLabel} />
-          <Info label="Department" value={me.department || me.courseFocus || "—"} />
-          <Info label="Matric No." value={me.matric || "—"} />
-          <Info label="Role" value={me.role === "lecturer" ? "Lecturer" : "Student"} />
+          <Info label="Age" value={me?.age || "—"} />
+          <Info label="School" value={me?.school || "—"} />
+          <Info label="Level" value={me?.classLevel || stageLabel} />
+          <Info label="Department" value={me?.department || me?.courseFocus || "—"} />
+          <Info label="Matric No." value={me?.matric || "—"} />
+          <Info label="Role" value={me?.role === "lecturer" ? "Lecturer" : "Student"} />
         </dl>
       </div>
 
@@ -101,15 +99,15 @@ export function Profile() {
       <div className="grid grid-cols-3 gap-3 mt-4">
         <div className="bg-gradient-to-br from-ink to-slate-800 rounded-[24px] p-4 text-off shadow-md">
           <p className="text-[10px] uppercase tracking-widest text-terra font-bold">Credits</p>
-          <p className="font-display font-bold text-2xl mt-1">{me.credits}</p>
+          <p className="font-display font-bold text-2xl mt-1">{me?.credits || 0}</p>
         </div>
         <div className="bg-white rounded-[24px] p-4 border border-ink/5 shadow-sm">
           <p className="text-[10px] uppercase tracking-widest text-ink/40 font-bold">Points</p>
-          <p className="font-display font-bold text-2xl mt-1">{me.knowledgePoints}</p>
+          <p className="font-display font-bold text-2xl mt-1">{me?.knowledgePoints || 0}</p>
         </div>
         <div className="bg-white rounded-[24px] p-4 border border-ink/5 shadow-sm">
           <p className="text-[10px] uppercase tracking-widest text-ink/40 font-bold">Streak</p>
-          <p className="font-display font-bold text-2xl mt-1 text-terra">{me.streak}🔥</p>
+          <p className="font-display font-bold text-2xl mt-1 text-terra">{me?.streak || 0}🔥</p>
         </div>
       </div>
 
@@ -140,23 +138,23 @@ export function Profile() {
       <section className="mt-8">
         <h2 className="font-display font-bold text-lg mb-3">Student Plans</h2>
         <div className="space-y-3">
-          {STUDENT_PLANS.map((p) => (
+          {(STUDENT_PLANS || []).map((p) => (
             <button
               key={p.id}
               type="button"
               onClick={() => handleSelectPlan(p.name, p.naira)}
               className={`press w-full text-left rounded-[24px] p-5 border shadow-sm transition-all ${
-                me.studentPlan === p.id ? "bg-ink text-off border-ink" : "bg-white border-ink/5 hover:border-terra/50"
+                me?.studentPlan === p.id ? "bg-ink text-off border-ink" : "bg-white border-ink/5 hover:border-terra/50"
               }`}
             >
               <div className="flex justify-between items-start">
                 <div>
-                  <p className="font-display font-bold text-lg">{p.name} {me.studentPlan === p.id && "✓"}</p>
-                  <p className={`text-sm mt-1 ${me.studentPlan === p.id ? "text-white/60" : "text-ink/55"}`}>{p.blurb}</p>
+                  <p className="font-display font-bold text-lg">{p.name} {me?.studentPlan === p.id && "✓"}</p>
+                  <p className={`text-sm mt-1 ${me?.studentPlan === p.id ? "text-white/60" : "text-ink/55"}`}>{p.blurb}</p>
                 </div>
                 <div className="text-right shrink-0 ml-4">
                   <p className="font-display font-bold text-xl">{formatMoney(p.naira, currency)}</p>
-                  <p className={`text-xs ${me.studentPlan === p.id ? "text-terra" : "text-ink/40"}`}>{periodLabel(p.period)}</p>
+                  <p className={`text-xs ${me?.studentPlan === p.id ? "text-terra" : "text-ink/40"}`}>{periodLabel(p.period)}</p>
                 </div>
               </div>
             </button>
@@ -168,18 +166,18 @@ export function Profile() {
       <section className="mt-8">
         <h2 className="font-display font-bold text-lg mb-3">Lecturer Plans</h2>
         <div className="space-y-3">
-          {LECTURER_PLANS.map((p) => (
+          {(LECTURER_PLANS || []).map((p) => (
             <button
               key={p.id}
               type="button"
               onClick={() => handleSelectPlan(p.name, p.naira)}
               className={`press w-full text-left rounded-[24px] p-5 border shadow-sm transition-all ${
-                me.lecturerPlan === p.id && me.role === "lecturer" ? "bg-sage/20 text-ink border-sage" : "bg-white border-ink/5 hover:border-sage/50"
+                me?.lecturerPlan === p.id && me?.role === "lecturer" ? "bg-sage/20 text-ink border-sage" : "bg-white border-ink/5 hover:border-sage/50"
               }`}
             >
               <div className="flex justify-between items-start">
                 <div>
-                  <p className="font-display font-bold text-lg">{p.name} {me.lecturerPlan === p.id && "✓"}</p>
+                  <p className="font-display font-bold text-lg">{p.name} {me?.lecturerPlan === p.id && "✓"}</p>
                   <p className="text-sm text-ink/55 mt-1">{p.uploads} uploads allowed</p>
                 </div>
                 <div className="text-right shrink-0 ml-4">
@@ -195,7 +193,7 @@ export function Profile() {
       {/* WITHDRAWALS */}
       <section className="mt-8 bg-white rounded-[24px] p-5 border border-ink/5 shadow-sm">
         <h2 className="font-display font-bold text-lg">Withdrawals</h2>
-        <p className="text-sm text-ink/55 mt-1">Balance: <span className="font-bold text-ink">{formatMoney(me.lecturerNaira, "NGN")}</span></p>
+        <p className="text-sm text-ink/55 mt-1">Balance: <span className="font-bold text-ink">{formatMoney(me?.lecturerNaira || 0, "NGN")}</span></p>
         <div className="flex gap-2 mt-4">
           <input className="flex-1 rounded-xl bg-off px-4 py-3 font-display font-bold border border-ink/10 outline-none" value={amount} onChange={(e) => setAmount(e.target.value)} type="number" />
           <button type="button" className="press rounded-xl bg-ink text-off font-display font-bold px-6" onClick={() => {
@@ -222,17 +220,17 @@ export function Profile() {
           <form className="bg-white w-full max-w-md rounded-t-[32px] p-6 space-y-3 shadow-2xl animate-in slide-in-from-bottom-8" onClick={(e) => e.stopPropagation()} onSubmit={(e) => {
               e.preventDefault();
               const fd = new FormData(e.currentTarget);
-              updateMe({ name: String(fd.get("name") || me.name), age: String(fd.get("age") || ""), school: String(fd.get("school") || ""), classLevel: String(fd.get("classLevel") || ""), department: String(fd.get("department") || ""), matric: String(fd.get("matric") || me.matric) });
+              updateMe({ name: String(fd.get("name") || me?.name), age: String(fd.get("age") || ""), school: String(fd.get("school") || ""), classLevel: String(fd.get("classLevel") || ""), department: String(fd.get("department") || ""), matric: String(fd.get("matric") || me?.matric) });
               toast("Profile saved.", "ok");
               setEditing(false);
             }}>
             <h2 className="font-display text-2xl font-bold text-center mb-6">Edit Profile</h2>
-            <input name="name" defaultValue={me.name} className="w-full rounded-xl bg-off border border-ink/10 px-4 py-3" placeholder="Full Name" />
-            <input name="age" defaultValue={me.age} className="w-full rounded-xl bg-off border border-ink/10 px-4 py-3" placeholder="Age" />
-            <input name="school" defaultValue={me.school} className="w-full rounded-xl bg-off border border-ink/10 px-4 py-3" placeholder="School" />
-            <input name="classLevel" defaultValue={me.classLevel} className="w-full rounded-xl bg-off border border-ink/10 px-4 py-3" placeholder="Level" />
-            <input name="department" defaultValue={me.department} className="w-full rounded-xl bg-off border border-ink/10 px-4 py-3" placeholder="Department" />
-            <input name="matric" defaultValue={me.matric} className="w-full rounded-xl bg-off border border-ink/10 px-4 py-3" placeholder="Matric" />
+            <input name="name" defaultValue={me?.name} className="w-full rounded-xl bg-off border border-ink/10 px-4 py-3" placeholder="Full Name" />
+            <input name="age" defaultValue={me?.age} className="w-full rounded-xl bg-off border border-ink/10 px-4 py-3" placeholder="Age" />
+            <input name="school" defaultValue={me?.school} className="w-full rounded-xl bg-off border border-ink/10 px-4 py-3" placeholder="School" />
+            <input name="classLevel" defaultValue={me?.classLevel} className="w-full rounded-xl bg-off border border-ink/10 px-4 py-3" placeholder="Level" />
+            <input name="department" defaultValue={me?.department} className="w-full rounded-xl bg-off border border-ink/10 px-4 py-3" placeholder="Department" />
+            <input name="matric" defaultValue={me?.matric} className="w-full rounded-xl bg-off border border-ink/10 px-4 py-3" placeholder="Matric" />
             <button className="press w-full rounded-xl bg-ink text-off font-display font-bold py-4 mt-2">Save Changes</button>
           </form>
         </div>
