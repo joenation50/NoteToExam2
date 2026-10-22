@@ -8,8 +8,7 @@ import {
   signOut, 
   onAuthStateChanged,
   GoogleAuthProvider,
-  signInWithRedirect,
-  getRedirectResult
+  signInWithPopup // CHANGED TO POPUP
 } from "firebase/auth";
 import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
 import { sha256 } from "./crypto";
@@ -147,7 +146,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => { listeners.delete(l); };
   }, []);
 
-  // FIREBASE AUTH LISTENER & SYNC (WITH INFINITE LOOP FIX)
+  // FIREBASE AUTH LISTENER & SYNC
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       try {
@@ -162,7 +161,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               localUser = { ...cloudData, id: firebaseUser.uid, sessionToken: uid("ses"), activeDeviceId: deviceId() } as User;
               db.users.push(localUser);
             } else {
-              localUser.credits = cloudData.credits; // Sync credits from cloud
+              localUser.credits = cloudData.credits;
               localUser.sessionToken = uid("ses");
             }
             commit();
@@ -174,49 +173,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         console.error("Auth listener error:", error);
       } finally {
-        setReady(true); // THIS IS THE FIX: Always stops the loading loop
+        setReady(true);
       }
     });
     return () => unsubscribe();
-  }, []);
-
-  // CATCH GOOGLE REDIRECT RESULT
-  useEffect(() => {
-    getRedirectResult(auth).then(async (result) => {
-      if (result?.user) {
-        const firebaseUser = result.user;
-        const docRef = doc(firestore, "profiles", firebaseUser.uid);
-        const docSnap = await getDoc(docRef);
-        
-        if (!docSnap.exists()) {
-          const plan = planMeta("free");
-          await setDoc(docRef, {
-            email: firebaseUser.email,
-            name: firebaseUser.displayName || firebaseUser.email?.split("@")[0],
-            matric: "",
-            role: "student",
-            credits: plan.credits,
-          });
-        }
-        
-        const docSnapAfter = await getDoc(docRef);
-        if (docSnapAfter.exists()) {
-          const cloudData = docSnapAfter.data();
-          let localUser = db.users.find(u => u.id === firebaseUser.uid);
-          if (!localUser) {
-            localUser = { ...cloudData, id: firebaseUser.uid, sessionToken: uid("ses"), activeDeviceId: deviceId() } as User;
-            db.users.push(localUser);
-          } else {
-            localUser.credits = cloudData.credits;
-            localUser.sessionToken = uid("ses");
-          }
-          commit();
-          persistSession(localUser.sessionToken);
-        }
-      }
-    }).catch((error) => {
-      console.error("Redirect result error:", error);
-    });
   }, []);
 
   const toast = useCallback((message: string, tone: ToastItem["tone"] = "info") => {
@@ -303,7 +263,38 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const googleContinue: StoreApi["googleContinue"] = async () => {
     const provider = new GoogleAuthProvider();
     try {
-      await signInWithRedirect(auth, provider);
+      const result = await signInWithPopup(auth, provider);
+      if (result.user) {
+         const firebaseUser = result.user;
+         const docRef = doc(firestore, "profiles", firebaseUser.uid);
+         const docSnap = await getDoc(docRef);
+         
+         if (!docSnap.exists()) {
+           const plan = planMeta("free");
+           await setDoc(docRef, {
+             email: firebaseUser.email,
+             name: firebaseUser.displayName || firebaseUser.email?.split("@")[0],
+             matric: "",
+             role: "student",
+             credits: plan.credits,
+           });
+         }
+         
+         const docSnapAfter = await getDoc(docRef);
+         if (docSnapAfter.exists()) {
+           const cloudData = docSnapAfter.data();
+           let localUser = db.users.find(u => u.id === firebaseUser.uid);
+           if (!localUser) {
+             localUser = { ...cloudData, id: firebaseUser.uid, sessionToken: uid("ses"), activeDeviceId: deviceId() } as User;
+             db.users.push(localUser);
+           } else {
+             localUser.credits = cloudData.credits;
+             localUser.sessionToken = uid("ses");
+           }
+           commit();
+           persistSession(localUser.sessionToken);
+         }
+      }
     } catch (error: any) {
       throw new Error(error.message || "Google sign-in failed.");
     }
