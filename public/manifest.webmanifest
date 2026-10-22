@@ -1,0 +1,15 @@
+{
+  "name": "NoteToExam",
+  "short_name": "NoteToExam",
+  "description": "Notes in. A's out. Summaries, CBT, and an AI tutor.",
+  "start_url": "/app",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F8F9FA",
+  "theme_color": "#0F172A",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" },
+    { "src": "/images/icon-n.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/images/icon-n.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
