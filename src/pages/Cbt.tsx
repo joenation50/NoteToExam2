@@ -44,54 +44,91 @@ export function Cbt() {
       setError("");
       try {
         const subjectsStr = sessionStorage.getItem("cbt_subjects");
-        // FIX #7: No Subjects Crash
         if (!subjectsStr) throw new Error("No subjects selected. Go back and pick subjects.");
         const subjects: string[] = JSON.parse(subjectsStr);
         
         const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-        if (!apiKey) throw new Error("Gemini API key missing. Check Netlify environment variables.");
+        if (!apiKey) throw new Error("Gemini API key missing. Check environment variables.");
 
         const questionsPerSubject = Math.floor(40 / subjects.length);
-        const prompt = `Generate exactly ${questionsPerSubject} multiple-choice questions for EACH of the following subjects: ${subjects.join(', ')}. 
-        Return the response ONLY as a valid JSON array.
-        Each object: { "subject": "...", "prompt": "...", "options": ["A","B","C","D"], "answer": "A", "explanation": "...", "format": "mcq", "topic": "..." }`;
-
-        // FIX #5: Timeout
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 20000);
-
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7 } }),
-          signal: controller.signal
-        });
         
-        clearTimeout(timeoutId);
+        const prompt = `Generate exactly ${questionsPerSubject} multiple-choice questions for EACH of the following subjects: ${subjects.join(', ')}. 
+        Return the response ONLY as a valid JSON array. Do not include markdown formatting like \`\`\`json.
+        Each object in the array must have this exact structure:
+        {
+          "subject": "Subject Name",
+          "prompt": "The question text?",
+          "options": ["Option A", "Option B", "Option C", "Option D"],
+          "answer": "Option A",
+          "explanation": "Why Option A is correct.",
+          "format": "mcq",
+          "topic": "General"
+        }`;
+
+        // RETRY LOGIC FOR 503 HIGH DEMAND
+        let response;
+        let retries = 3;
+        while (retries > 0) {
+          response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: { temperature: 0.7 }
+            })
+          });
+
+          if (response.ok) break; // Success!
+
+          const errData = await response.json();
+          if (response.status === 503 || response.status === 429) {
+            // Server busy or rate limited, wait 2s and retry
+            await new Promise(res => setTimeout(res, 2000));
+            retries--;
+          } else {
+            // Other errors (like 404 model not found) -> fail immediately
+            throw new Error(errData.error?.message || "Gemini API failed.");
+          }
+        }
+
+        if (!response || !response.ok) {
+          throw new Error("Gemini is currently experiencing high demand. Please try again in a few minutes.");
+        }
+
         const data = await response.json();
         
-        if (data.error) throw new Error(`Gemini API Error: ${data.error.message}`);
-        if (!data.candidates || !data.candidates[0] || !data.candidates[0].content) throw new Error("Gemini returned an empty result.");
+        if (!data.candidates || !data.candidates[0] || !data.candidates[0].content) {
+          throw new Error("Gemini returned an empty result. Try different subjects.");
+        }
 
         let textResponse = data.candidates[0].content.parts[0].text;
+        
         textResponse = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
         const startIdx = textResponse.indexOf('[');
         const endIdx = textResponse.lastIndexOf(']');
-        if (startIdx !== -1 && endIdx !== -1) textResponse = textResponse.substring(startIdx, endIdx + 1);
+        if (startIdx !== -1 && endIdx !== -1) {
+          textResponse = textResponse.substring(startIdx, endIdx + 1);
+        }
 
-        // FIX #3: JSON Parse Crash & FIX #21: 0 Questions
         let parsed;
         try {
           parsed = JSON.parse(textResponse);
         } catch (parseErr) {
           throw new Error("The AI returned an invalid format. Please try again.");
         }
-        if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("The AI failed to generate questions. Please try again.");
+        
+        if (!Array.isArray(parsed) || parsed.length === 0) {
+          throw new Error("The AI failed to generate questions. Please try again.");
+        }
 
-        setCustomQuestions(parsed.map((q: any, index: number) => ({ ...q, id: `q-${index}-${Date.now()}` })));
+        const formattedQuestions = parsed.map((q: any, index: number) => ({
+          ...q,
+          id: `q-${index}-${Date.now()}`
+        }));
+
+        setCustomQuestions(formattedQuestions);
       } catch (err: any) {
-        if (err.name === 'AbortError') setError("The AI took too long to respond. Check your internet.");
-        else setError(err.message || "Failed to generate test.");
+        setError(err.message || "Failed to generate test.");
       } finally {
         setLoading(false);
       }
@@ -100,7 +137,6 @@ export function Cbt() {
     generateTest();
   }, [isCustomTest]);
 
-  // FIX #1: Refresh State Wipe
   useEffect(() => {
     if (isCustomTest && !done && bank.length > 0) {
       localStorage.setItem(`cbt_progress_${id}`, JSON.stringify({ i, answers, secs }));
