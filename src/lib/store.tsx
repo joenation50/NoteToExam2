@@ -144,49 +144,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const l = () => setTick((n) => n + 1);
     listeners.add(l);
+    
+    // INSTANT RENDER FIX: Set ready to true immediately so the app doesn't hang on a blue screen.
+    setReady(true); 
+    
     return () => { listeners.delete(l); };
   }, []);
 
-  // FIREBASE AUTH LISTENER
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      try {
-        if (firebaseUser) {
-          const docRef = doc(firestore, "profiles", firebaseUser.uid);
-          const docSnap = await getDoc(docRef);
-          
-          if (docSnap.exists()) {
-            const cloudData = docSnap.data();
-            let localUser = db.users.find(u => u.id === firebaseUser.uid);
-            if (!localUser) {
-              localUser = { ...cloudData, id: firebaseUser.uid, sessionToken: uid("ses"), activeDeviceId: deviceId() } as User;
-              db.users.push(localUser);
-            } else {
-              localUser.credits = cloudData.credits;
-              localUser.sessionToken = uid("ses");
-            }
-            commit();
-            persistSession(localUser.sessionToken);
-          }
-        } else {
-          persistSession(null);
-        }
-      } catch (error) {
-        console.error("Auth listener error:", error);
-      } finally {
-        setReady(true);
-      }
-    });
-    return () => unsubscribe();
-  }, []);
-
-  // CATCH GOOGLE REDIRECT RESULT WITH 10-SECOND TIMEOUT
+  // CATCH GOOGLE REDIRECT RESULT (With 10s timeout fallback)
   useEffect(() => {
     let isSubscribed = true;
     const timeout = setTimeout(() => {
-      if (isSubscribed && !me) {
-        setReady(true); // Stop the spinner if it takes too long
-      }
+      if (isSubscribed && !me) setReady(true);
     }, 10000);
 
     getRedirectResult(auth).then(async (result) => {
@@ -235,6 +204,39 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       isSubscribed = false;
       clearTimeout(timeout);
     };
+  }, []);
+
+  // FIREBASE AUTH LISTENER
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      try {
+        if (firebaseUser) {
+          const docRef = doc(firestore, "profiles", firebaseUser.uid);
+          const docSnap = await getDoc(docRef);
+          
+          if (docSnap.exists()) {
+            const cloudData = docSnap.data();
+            let localUser = db.users.find(u => u.id === firebaseUser.uid);
+            if (!localUser) {
+              localUser = { ...cloudData, id: firebaseUser.uid, sessionToken: uid("ses"), activeDeviceId: deviceId() } as User;
+              db.users.push(localUser);
+            } else {
+              localUser.credits = cloudData.credits;
+              localUser.sessionToken = uid("ses");
+            }
+            commit();
+            persistSession(localUser.sessionToken);
+          }
+        } else {
+          persistSession(null);
+        }
+      } catch (error) {
+        console.error("Auth listener error:", error);
+      } finally {
+        setReady(true);
+      }
+    });
+    return () => unsubscribe();
   }, []);
 
   const toast = useCallback((message: string, tone: ToastItem["tone"] = "info") => {
