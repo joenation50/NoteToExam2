@@ -147,30 +147,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => { listeners.delete(l); };
   }, []);
 
-  // FIREBASE AUTH LISTENER & SYNC
+  // FIREBASE AUTH LISTENER & SYNC (WITH INFINITE LOOP FIX)
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (firebaseUser) {
-        const docRef = doc(firestore, "profiles", firebaseUser.uid);
-        const docSnap = await getDoc(docRef);
-        
-        if (docSnap.exists()) {
-          const cloudData = docSnap.data();
-          let localUser = db.users.find(u => u.id === firebaseUser.uid);
-          if (!localUser) {
-            localUser = { ...cloudData, id: firebaseUser.uid, sessionToken: uid("ses"), activeDeviceId: deviceId() } as User;
-            db.users.push(localUser);
-          } else {
-            localUser.credits = cloudData.credits; // Sync credits from cloud
-            localUser.sessionToken = uid("ses");
+      try {
+        if (firebaseUser) {
+          const docRef = doc(firestore, "profiles", firebaseUser.uid);
+          const docSnap = await getDoc(docRef);
+          
+          if (docSnap.exists()) {
+            const cloudData = docSnap.data();
+            let localUser = db.users.find(u => u.id === firebaseUser.uid);
+            if (!localUser) {
+              localUser = { ...cloudData, id: firebaseUser.uid, sessionToken: uid("ses"), activeDeviceId: deviceId() } as User;
+              db.users.push(localUser);
+            } else {
+              localUser.credits = cloudData.credits; // Sync credits from cloud
+              localUser.sessionToken = uid("ses");
+            }
+            commit();
+            persistSession(localUser.sessionToken);
           }
-          commit();
-          persistSession(localUser.sessionToken);
+        } else {
+          persistSession(null);
         }
-      } else {
-        persistSession(null);
+      } catch (error) {
+        console.error("Auth listener error:", error);
+      } finally {
+        setReady(true); // THIS IS THE FIX: Always stops the loading loop
       }
-      setReady(true);
     });
     return () => unsubscribe();
   }, []);
