@@ -21,5 +21,16 @@ export default defineConfig(async ({ mode }) => {
     plugins,
     envPrefix: ['VITE_', 'NEXT_PUBLIC_'],
     define: processEnvDefines,
+    // ADDED: This ensures Cloudflare handles React Router correctly
+    server: {
+      historyApiFallback: true,
+    },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: undefined,
+        },
+      },
+    },
   };
 })
