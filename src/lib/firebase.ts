@@ -4,7 +4,7 @@ import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyChHPI-XFrFl_u8ycffd4xucOir6Gf3zGQ",
-  authDomain: "notetoexam.pages.dev",
+  authDomain: "notetoexam.firebaseapp.com", // Changed back to default Firebase domain
   projectId: "notetoexam",
   storageBucket: "notetoexam.firebasestorage.app",
   messagingSenderId: "1027570273647",
@@ -12,10 +12,8 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-
 export const auth = getAuth(app);
 
-// CRITICAL FIX: Force Firebase to remember the user across app reloads
 setPersistence(auth, browserLocalPersistence).catch((error) => {
   console.error("Failed to set auth persistence:", error);
 });
