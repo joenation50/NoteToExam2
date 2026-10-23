@@ -4,7 +4,7 @@ import { useStore } from "../lib/store";
 export function RequireAuth({ children }: { children: React.ReactNode }) {
   const { me, ready } = useStore();
 
-  // 1. Wait for Firebase to finish checking the session
+  // 1. Wait for the app to check the local storage
   if (!ready) {
     return (
       <div className="min-h-screen bg-off grid place-items-center">
@@ -13,7 +13,7 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // 2. If Firebase is done and there is no user, redirect to login
+  // 2. If there is truly no user, redirect to login
   if (!me) {
     return <Navigate to="/auth" replace />;
   }
