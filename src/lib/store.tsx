@@ -13,7 +13,7 @@ import {
 } from "firebase/auth";
 import {
   doc, getDoc, setDoc, updateDoc,
-  runTransaction, onSnapshot, collection, query, orderBy, limit,
+  runTransaction, onSnapshot, collection, query, orderBy, limit, where,
 } from "firebase/firestore";
 import { deviceId, referralCode, todayKey, uid } from "./id";
 import { idbSet } from "./idb";
@@ -62,8 +62,6 @@ function loadDb(): DB {
     const raw = localStorage.getItem(DB_KEY);
     if (!raw) return emptyDb();
     const parsed = JSON.parse(raw);
-    
-    // Ensure all arrays exist so .filter() and .map() never crash
     return {
       ...emptyDb(),
       ...parsed,
@@ -285,8 +283,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               localUser = hydrateUser(cloudData, firebaseUser.uid);
               db.users.push(localUser);
             } else {
-              // Merge cloud fields but preserve local session fields
-              const token = uid("ses");
+              const token = localUser.sessionToken || uid("ses");
               const dev = deviceId();
               Object.assign(localUser, cloudData);
               localUser.id = firebaseUser.uid;
@@ -294,15 +291,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               localUser.activeDeviceId = dev;
             }
             commit();
-            persistSession(localUser.sessionToken!);
+            localStorage.setItem(SESSION_KEY, localUser.sessionToken!);
+            setSession(localUser.sessionToken!);
           } else {
             console.warn("No profile doc for signed-in Firebase user", firebaseUser.uid);
           }
         } else {
+          // Firebase is null. ONLY clear session if we don't have a saved one locally.
           const storedSession = localStorage.getItem(SESSION_KEY);
-          if (storedSession) {
-            const localUser = db.users.find(u => u.sessionToken === storedSession);
-            if (!localUser) persistSession(null);
+          if (!storedSession) {
+            setSession(null);
           }
         }
       } catch (error) {
@@ -337,7 +335,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const cloudUser = hydrateUser(data, d.id);
 
           if (existing) {
-            // Preserve local-only session fields, otherwise take cloud truth
             const sToken = existing.sessionToken;
             const aDev = existing.activeDeviceId;
             Object.assign(existing, {
@@ -346,7 +343,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               activeDeviceId: aDev,
             });
           } else {
-            // This is a user from another device/account — no session
             db.users.push({
               ...cloudUser,
               sessionToken: null,
@@ -495,7 +491,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         activeDeviceId: null,
       });
 
-      // Replace any stale local copy
       const idx = db.users.findIndex(u => u.id === user.id);
       if (idx >= 0) db.users[idx] = user;
       else db.users.push(user);
@@ -592,7 +587,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const updateMe = async (patch: Partial<User>) => {
     if (!me) return;
 
-    // Prevent crashes if arrays are missing
     if (patch.weakTopics === undefined) patch.weakTopics = me.weakTopics || {};
     if (patch.studySeconds === undefined) patch.studySeconds = me.studySeconds || {};
 
@@ -632,7 +626,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const uploadNote: StoreApi["uploadNote"] = (note) => {
     if (!me) throw new Error("Sign in first.");
-    if (!db.notes) db.notes = []; // Safety check
+    if (!db.notes) db.notes = [];
     
     const docObj: NoteDoc = { 
       ...note, 
@@ -651,8 +645,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const saveSet: StoreApi["saveSet"] = (set) => {
     if (!me) throw new Error("Sign in first.");
-    if (!db.sets) db.sets = []; // Safety check
-
+    if (!db.sets) db.sets = [];
     const row: QuestionSet = { ...set, id: uid("set"), ownerId: me.id, createdAt: Date.now(), attempts: 0, lastScore: null };
     db.sets.push(row); 
     void idbSet("sets", row.id, row); 
