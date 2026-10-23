@@ -5,17 +5,16 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   envPrefix: ['VITE_', 'NEXT_PUBLIC_'],
-  server: {
-    // This helps during local dev
-    headers: {
-      "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
-    },
-  },
   build: {
     rollupOptions: {
       output: {
-        manualChunks: undefined,
-      },
-    },
-  },
+        manualChunks: {
+          vendor: ['react', 'react-dom', 'react-router-dom'],
+          firebase: ['firebase/app', 'firebase/auth', 'firebase/firestore'],
+          charts: ['recharts'],
+          ui: ['framer-motion', 'lucide-react']
+        }
+      }
+    }
+  }
 })
