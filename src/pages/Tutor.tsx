@@ -1,9 +1,9 @@
-import { Mic } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { Mic, PhoneOff, X } from "lucide-react";
+import { useMemo, useRef, useState, useEffect } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { EmptyState } from "../components/EmptyState";
 import { Seo } from "../components/Seo";
-import { listen, speak, tutorReply } from "../lib/gemini";
+import { listen, speak, tutorReply, startLiveCall } from "../lib/gemini";
 import { uid } from "../lib/id";
 import { processNoteFile } from "../lib/notes";
 import { useStore } from "../lib/store";
@@ -18,29 +18,44 @@ export function Tutor() {
   const [params] = useSearchParams();
   const noteId = params.get("note");
   
-  // SAFETY FIX: Added || [] so it doesn't crash if db.notes is undefined
   const notes = (db.notes || []).filter((n) => n.ownerId === me?.id);
   const note = notes.find((n) => n.id === noteId) || notes[0] || null;
-  
-  // SAFETY FIX: Added || [] here as well
   const set = (db.sets || []).find((s) => s.noteId === note?.id);
   const theory = set?.questions?.filter((q) => q.format === "theory") || [];
 
   const thread = useMemo(() => {
     if (!me) return null;
-    // SAFETY FIX: Added || [] here as well
     return (db.threads || []).find((x) => x.ownerId === me.id && x.noteId === (note?.id ?? null)) ?? null;
   }, [me, note?.id, db.threads]);
 
   const [text, setText] = useState("");
   const [eli5, setEli5] = useState(false);
-  const [live, setLive] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  async function ask(q: string) {
+  // Voice Note & Live Call States
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [liveCallActive, setLiveCallActive] = useState(false);
+  const stopLiveCallRef = useRef(false);
+
+  // Cleanup live call on unmount
+  useEffect(() => {
+    return () => {
+      stopLiveCallRef.current = true;
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    };
+  }, []);
+
+  async function ask(q: string, isLive = false) {
     if (!me) return;
-    if (me.chatCap >= 0 && me.chatsUsed >= me.chatCap) return toast("AI chat cap reached.", "err");
-    if (db.flags.pauseAi) return toast("Tutor is paused.", "err");
+    if (me.chatCap >= 0 && me.chatsUsed >= me.chatCap) {
+      if (isLive) return; // Ignore cap in live mode to prevent breaking the call loop
+      return toast("AI chat cap reached.", "err");
+    }
+    if (db.flags.pauseAi) {
+      if (isLive) return;
+      return toast("Tutor is paused.", "err");
+    }
     
     let t = thread;
     if (!t) {
@@ -52,22 +67,78 @@ export function Tutor() {
     try {
       const res = await tutorReply({ notes: note?.text || "", history: t.messages.map((m) => ({ role: m.role, text: m.text })), question: q, eli5 });
       addTutorMessage(t.id, { id: uid("cm"), role: "tutor", text: res.text, citations: res.citations, createdAt: Date.now(), eli5 });
-      if (live) speak(res.text);
+      return res;
     } catch {
-      toast("Tutor could not answer.", "err");
+      if (!isLive) toast("Tutor could not answer.", "err");
+      return { text: "I encountered an error. Please try again.", citations: [] };
     } finally {
       setBusy(false);
     }
   }
 
-  async function voice() {
+  // ────────────────────────────────────────────────────────────
+  // VOICE NOTE LOGIC
+  // ────────────────────────────────────────────────────────────
+  async function handleVoiceNote() {
+    if (isRecording || liveCallActive) return;
+    setIsRecording(true);
+    setRecordingSeconds(0);
+    
+    const timer = setInterval(() => setRecordingSeconds(s => s + 1), 1000);
+
     try {
-      setLive(true);
       const heard = await listen();
       setText(heard);
       await ask(heard);
     } catch (e) {
       toast(e instanceof Error ? e.message : "Voice unavailable.", "err");
+    } finally {
+      clearInterval(timer);
+      setIsRecording(false);
+    }
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // LIVE CALL LOGIC
+  // ────────────────────────────────────────────────────────────
+  async function toggleLiveCall() {
+    if (liveCallActive) {
+      stopLiveCallRef.current = true;
+      setLiveCallActive(false);
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+      return;
+    }
+
+    setLiveCallActive(true);
+    stopLiveCallRef.current = false;
+
+    try {
+      await startLiveCall(
+        (userText) => {
+          // When user speaks, add their message to the UI instantly
+          if (!me) return;
+          let t = thread || { id: uid("th"), ownerId: me.id, noteId: note?.id ?? null, title: note?.title || "General", messages: [], updatedAt: Date.now() };
+          if (!thread) upsertThread(t);
+          addTutorMessage(t.id, { id: uid("cm"), role: "user", text: userText, citations: [], createdAt: Date.now(), eli5 });
+        },
+        (aiText) => {
+          // When AI replies, add it to the UI
+          if (!me) return;
+          let t = thread || { id: uid("th"), ownerId: me.id, noteId: note?.id ?? null, title: note?.title || "General", messages: [], updatedAt: Date.now() };
+          addTutorMessage(t.id, { id: uid("cm"), role: "tutor", text: aiText, citations: [], createdAt: Date.now(), eli5 });
+        },
+        async (userText) => {
+          // The actual API call
+          const res = await ask(userText, true);
+          return { text: res?.text || "I didn't catch that." };
+        },
+        () => {}, // onListening (optional UI updates)
+        () => {}, // onSpeaking (optional UI updates)
+        () => stopLiveCallRef.current // Check if we should stop
+      );
+    } catch (e: any) {
+      toast(e.message || "Live call failed.", "err");
+      setLiveCallActive(false);
     }
   }
 
@@ -82,7 +153,6 @@ export function Tutor() {
         me, canGenerate, addCredits, recordGeneration, refundCredits, uploadNote, saveSet, touchStreak, onProgress: setProgress 
       });
 
-      // SAFETY CHECK: Prevent crash if AI fails
       if (!result || !result.note || !result.set) {
         throw new Error("The AI failed to read this file. Please try a clearer image or PDF.");
       }
@@ -134,7 +204,7 @@ export function Tutor() {
             </div>
           )}
 
-          <div className="mt-4 flex-1 space-y-3">
+          <div className="mt-4 flex-1 space-y-3 pb-32">
             {thread?.messages.map((m) => (
               <div key={m.id} className={`rounded-[22px] px-4 py-3 ${m.role === "user" ? "bg-ink text-off ml-8" : "bg-white mr-6"}`}>
                 <p className="whitespace-pre-wrap text-[15px] leading-relaxed">{m.text}</p>
@@ -145,16 +215,65 @@ export function Tutor() {
                 )}
               </div>
             ))}
-            {busy && <div className="skeleton h-16 rounded-[22px]" />}
+            {busy && !liveCallActive && <div className="skeleton h-16 rounded-[22px]" />}
           </div>
 
-          <div className="sticky bottom-24 mt-4 bg-off pt-2">
-            <button type="button" onClick={() => void voice()} className={`press w-full mb-2 rounded-full font-display font-bold py-3 ${live ? "bg-sage text-ink" : "bg-ink text-off"}`}>Live voice call</button>
-            <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); const q = text.trim(); if (!q) return; setText(""); void ask(q); }}>
-              <button type="button" onClick={() => void voice()} className={`press h-12 w-12 rounded-full grid place-items-center ${live ? "bg-sage text-ink" : "bg-ink text-off"}`}><Mic size={18} /></button>
-              <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Ask from the notes…" className="flex-1 rounded-full bg-white px-4 py-3 outline-none border border-ink/10" />
-              <button className="press rounded-full bg-terra text-ink font-display font-bold px-5">Send</button>
-            </form>
+          {/* STICKY BOTTOM CONTROLS */}
+          <div className="fixed bottom-0 left-0 right-0 z-50 bg-off/90 backdrop-blur-md pb-safe pt-3 px-5 border-t border-ink/5">
+            
+            {/* Live Call Overlay Bar */}
+            {liveCallActive && (
+              <div className="mb-3 flex items-center justify-between bg-sage/20 rounded-full p-2 pl-4 animate-pulse">
+                <p className="text-xs font-bold text-sage-deep">Live call active... Speak now</p>
+                <button onClick={toggleLiveCall} className="bg-red-500 text-white rounded-full p-2"><PhoneOff size={16} /></button>
+              </div>
+            )}
+
+            <div className="flex gap-2 items-center pb-4">
+              {/* Voice Note / Mic Button */}
+              <button 
+                type="button" 
+                onClick={handleVoiceNote} 
+                disabled={liveCallActive}
+                className={`press h-12 w-12 rounded-full grid place-items-center transition-all ${
+                  isRecording ? "bg-red-500 text-white animate-pulse w-24" : "bg-ink text-off"
+                }`}
+              >
+                {isRecording ? (
+                  <span className="text-xs font-bold flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+                    {recordingSeconds}s
+                  </span>
+                ) : (
+                  <Mic size={18} />
+                )}
+              </button>
+
+              {/* Text Input */}
+              <form className="flex-1 flex gap-2" onSubmit={(e) => { e.preventDefault(); const q = text.trim(); if (!q) return; setText(""); void ask(q); }}>
+                <input 
+                  value={text} 
+                  onChange={(e) => setText(e.target.value)} 
+                  disabled={isRecording || liveCallActive}
+                  placeholder={isRecording ? "Listening..." : "Ask anything..."} 
+                  className="flex-1 rounded-full bg-white px-4 py-3 outline-none border border-ink/10 text-sm disabled:opacity-50" 
+                />
+                <button disabled={isRecording || liveCallActive} className="press rounded-full bg-terra text-ink font-display font-bold px-5 disabled:opacity-50">Send</button>
+              </form>
+
+              {/* Live Call Toggle Button */}
+              {!isRecording && (
+                <button 
+                  type="button" 
+                  onClick={toggleLiveCall} 
+                  className={`press h-12 w-12 rounded-full grid place-items-center shrink-0 ${
+                    liveCallActive ? "bg-red-500 text-white" : "bg-sage text-ink"
+                  }`}
+                >
+                  {liveCallActive ? <X size={20} /> : <div className="w-4 h-4 rounded-full border-2 border-ink" />}
+                </button>
+              )}
+            </div>
           </div>
         </>
       )}
