@@ -167,9 +167,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             commit();
             persistSession(localUser.sessionToken);
           }
-        } else {
-          persistSession(null);
-        }
+        } 
+        // REMOVED: persistSession(null); 
+        // We do NOT log the user out automatically here. 
+        // We rely on the local 'session' state.
       } catch (error) {
         console.error("Auth listener error:", error);
       } finally {
@@ -179,25 +180,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => unsubscribe();
   }, []);
 
-  // --- NEW: CLEANUP EXPIRED MEDIA (Older than 7 days) ---
+  // CLEANUP EXPIRED MEDIA (Older than 7 days)
   useEffect(() => {
     if (!ready) return; 
-    
     const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
     const now = Date.now();
     let changed = false;
 
-    // Clean up Direct Messages
     db.convos.forEach(c => {
       c.messages.forEach(m => {
         if ((m.kind === "voice" || m.kind === "image") && m.media && (now - m.createdAt > ONE_WEEK_MS)) {
-          m.media = ""; // Delete the heavy file data to save space
+          m.media = "";
           changed = true;
         }
       });
     });
 
-    // Clean up Group Messages
     db.groups.forEach(g => {
       g.messages.forEach(m => {
         if ((m.kind === "voice" || m.kind === "image") && m.media && (now - m.createdAt > ONE_WEEK_MS)) {
@@ -207,10 +205,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       });
     });
 
-    if (changed) {
-      commit(); 
-      console.log("Cleaned up old media to save storage.");
-    }
+    if (changed) commit(); 
   }, [ready]);
 
   const toast = useCallback((message: string, tone: ToastItem["tone"] = "info") => {
