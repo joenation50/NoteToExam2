@@ -61,7 +61,24 @@ function loadDb(): DB {
   try {
     const raw = localStorage.getItem(DB_KEY);
     if (!raw) return emptyDb();
-    return { ...emptyDb(), ...JSON.parse(raw) } as DB;
+    const parsed = JSON.parse(raw);
+    
+    // Ensure all arrays exist so .filter() and .map() never crash
+    return {
+      ...emptyDb(),
+      ...parsed,
+      users: parsed.users || [],
+      notes: parsed.notes || [],
+      sets: parsed.sets || [],
+      attempts: parsed.attempts || [],
+      threads: parsed.threads || [],
+      market: parsed.market || [],
+      purchases: parsed.purchases || [],
+      wall: parsed.wall || [],
+      groups: parsed.groups || [],
+      convos: parsed.convos || [],
+      payouts: parsed.payouts || [],
+    } as DB;
   } catch {
     return emptyDb();
   }
@@ -279,15 +296,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             commit();
             persistSession(localUser.sessionToken!);
           } else {
-            // No profile doc — don't force a logout silently; leave user
-            // in whatever local state we had. (Their signup may have
-            // half-failed; safer than bouncing them.)
             console.warn("No profile doc for signed-in Firebase user", firebaseUser.uid);
           }
         } else {
-          // Firebase says signed out. Only clear our local session if we
-          // CANNOT find a matching local user — otherwise keep them signed in
-          // (offline-friendly, and survives flaky network).
           const storedSession = localStorage.getItem(SESSION_KEY);
           if (storedSession) {
             const localUser = db.users.find(u => u.sessionToken === storedSession);
@@ -353,22 +364,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => unsubscribe();
   }, [ready]);
 
-  // Cleanup expired media (unchanged)
+  // Cleanup expired media
   useEffect(() => {
     if (!ready) return;
     const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
     const now = Date.now();
     let changed = false;
 
-    db.convos.forEach(c => {
-      c.messages.forEach(m => {
+    (db.convos || []).forEach(c => {
+      (c.messages || []).forEach(m => {
         if ((m.kind === "voice" || m.kind === "image") && m.media && (now - m.createdAt > ONE_WEEK_MS)) {
           m.media = ""; changed = true;
         }
       });
     });
-    db.groups.forEach(g => {
-      g.messages.forEach(m => {
+    (db.groups || []).forEach(g => {
+      (g.messages || []).forEach(m => {
         if ((m.kind === "voice" || m.kind === "image") && m.media && (now - m.createdAt > ONE_WEEK_MS)) {
           m.media = ""; changed = true;
         }
@@ -407,7 +418,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   };
 
   // ────────────────────────────────────────────────────────────
-  // SIGNUP (FIX 3 — write full profile incl. username)
+  // SIGNUP
   // ────────────────────────────────────────────────────────────
   const signup: StoreApi["signup"] = async (opts) => {
     const email = opts.email?.trim().toLowerCase();
@@ -581,6 +592,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const updateMe = async (patch: Partial<User>) => {
     if (!me) return;
 
+    // Prevent crashes if arrays are missing
+    if (patch.weakTopics === undefined) patch.weakTopics = me.weakTopics || {};
+    if (patch.studySeconds === undefined) patch.studySeconds = me.studySeconds || {};
+
     let nextUsername: string | null = null;
     if (patch.username !== undefined) {
       const current = me.username;
@@ -610,37 +625,55 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const bumpStudy = (seconds: number) => { if (!me) return; const k = todayKey(); me.studySeconds = { ...me.studySeconds, [k]: (me.studySeconds[k] || 0) + seconds }; commit(); };
+  const bumpStudy = (seconds: number) => { if (!me) return; const k = todayKey(); me.studySeconds = { ...(me.studySeconds || {}), [k]: ((me.studySeconds || {})[k] || 0) + seconds }; commit(); };
   const touchStreak = () => { if (!me) return; const k = todayKey(); if (me.lastStudyDay === k) return; const y = new Date(); y.setDate(y.getDate() - 1); const yk = todayKey(y); me.streak = me.lastStudyDay === yk ? me.streak + 1 : 1; me.lastStudyDay = k; commit(); };
   const subscribePlan = (plan: StudentPlan) => { if (!me) return; const meta = planMeta(plan); me.studentPlan = plan; me.credits += meta.credits; me.chatCap = meta.chats; me.devicesAllowed = meta.devices; commit(); };
   const subscribeLecturer = (plan: LecturerPlan) => { if (!me) return; me.lecturerPlan = plan; me.role = "lecturer"; commit(); };
 
   const uploadNote: StoreApi["uploadNote"] = (note) => {
     if (!me) throw new Error("Sign in first.");
-    const docObj: NoteDoc = { ...note, id: uid("note"), ownerId: me.id, createdAt: Date.now(), charCount: Math.min(note.charCount, MAX_NOTE_CHARS), text: note.text.slice(0, MAX_NOTE_CHARS) };
-    db.notes.push(docObj); void idbSet("notes", docObj.id, docObj); commit(); return docObj;
+    if (!db.notes) db.notes = []; // Safety check
+    
+    const docObj: NoteDoc = { 
+      ...note, 
+      id: uid("note"), 
+      ownerId: me.id, 
+      createdAt: Date.now(), 
+      charCount: Math.min(note.charCount || 0, MAX_NOTE_CHARS), 
+      text: (note.text || "").slice(0, MAX_NOTE_CHARS) 
+    };
+    
+    db.notes.push(docObj); 
+    void idbSet("notes", docObj.id, docObj); 
+    commit(); 
+    return docObj;
   };
 
   const saveSet: StoreApi["saveSet"] = (set) => {
     if (!me) throw new Error("Sign in first.");
+    if (!db.sets) db.sets = []; // Safety check
+
     const row: QuestionSet = { ...set, id: uid("set"), ownerId: me.id, createdAt: Date.now(), attempts: 0, lastScore: null };
-    db.sets.push(row); void idbSet("sets", row.id, row); commit(); return row;
+    db.sets.push(row); 
+    void idbSet("sets", row.id, row); 
+    commit(); 
+    return row;
   };
 
   const canGenerate = () => {
     if (!me) return { ok: false, reason: "Sign in to generate questions." };
     if (db.flags.pauseAi) return { ok: false, reason: "The tutor is paused right now." };
     const hourAgo = Date.now() - 60 * 60 * 1000;
-    me.generations = me.generations.filter((g) => g.t > hourAgo);
+    me.generations = (me.generations || []).filter((g) => g.t > hourAgo);
     if (me.generations.length >= GENERATIONS_PER_HOUR) return { ok: false, reason: "Hourly limit reached." };
     return { ok: true };
   };
 
-  const recordGeneration = () => { const gate = canGenerate(); if (!gate.ok) return gate; me!.generations.push({ t: Date.now() }); commit(); return { ok: true }; };
+  const recordGeneration = () => { const gate = canGenerate(); if (!gate.ok) return gate; if(!me!.generations) me!.generations = []; me!.generations.push({ t: Date.now() }); commit(); return { ok: true }; };
   const refundCredits = (n: number) => { if (!me) return; me.credits += n; commit(); };
-  const saveAttempt: StoreApi["saveAttempt"] = (a) => { const row: CbtAttempt = { ...a, id: uid("att") }; db.attempts.push(row); commit(); return row; };
-  const upsertThread = (t: TutorThread) => { const i = db.threads.findIndex((x) => x.id === t.id); if (i >= 0) db.threads[i] = t; else db.threads.push(t); commit(); };
-  const addTutorMessage = (threadId: string, msg: ChatMessage) => { const t = db.threads.find((x) => x.id === threadId); if (!t) return; t.messages.push(msg); t.updatedAt = Date.now(); if (me) me.chatsUsed += msg.role === "user" ? 1 : 0; commit(); };
+  const saveAttempt: StoreApi["saveAttempt"] = (a) => { if (!db.attempts) db.attempts = []; const row: CbtAttempt = { ...a, id: uid("att") }; db.attempts.push(row); commit(); return row; };
+  const upsertThread = (t: TutorThread) => { if (!db.threads) db.threads = []; const i = db.threads.findIndex((x) => x.id === t.id); if (i >= 0) db.threads[i] = t; else db.threads.push(t); commit(); };
+  const addTutorMessage = (threadId: string, msg: ChatMessage) => { if (!db.threads) db.threads = []; const t = db.threads.find((x) => x.id === threadId); if (!t) return; if(!t.messages) t.messages = []; t.messages.push(msg); t.updatedAt = Date.now(); if (me) me.chatsUsed += msg.role === "user" ? 1 : 0; commit(); };
 
   const publishItem: StoreApi["publishItem"] = (item) => {
     if (!me) throw new Error("Sign in first.");
@@ -648,6 +681,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const cost = item.kind === "video" ? PUBLISH_COST.video : PUBLISH_COST.pdf;
     if (me.credits < cost) throw new Error(`Publishing needs ${cost} credits.`);
     me.credits -= cost;
+    if (!db.market) db.market = [];
     const row: MarketItem = { ...item, id: uid("mkt"), sellerId: me.id, sellerName: me.name, createdAt: Date.now(), buyers: [], ratingSum: 0, ratingCount: 0 };
     db.market.push(row); commit(); return row;
   };
@@ -655,16 +689,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const buyWithCredits = (itemId: string) => { if (!me) throw new Error("Sign in first."); const item = db.market.find((m) => m.id === itemId); if (!item) throw new Error("Gone."); if (item.buyers.includes(me.id)) throw new Error("You own this."); if (me.credits < item.creditPrice) throw new Error("Not enough credits."); me.credits -= item.creditPrice; item.buyers.push(me.id); commit(); };
   const buyWithFiat = (itemId: string) => { if (!me) throw new Error("Sign in first."); const item = db.market.find((m) => m.id === itemId); if (!item) throw new Error("Gone."); item.buyers.push(me.id); commit(); };
   const rateItem = (itemId: string, stars: number) => { const item = db.market.find((m) => m.id === itemId); if (!item || !me || !item.buyers.includes(me.id)) return; item.ratingSum += stars; item.ratingCount += 1; commit(); };
-  const addWallPost: StoreApi["addWallPost"] = (p) => { if (!me) throw new Error("Sign in first."); db.wall.unshift({ ...p, id: uid("wall"), authorId: me.id, authorName: me.name, createdAt: Date.now(), comments: [] }); commit(); };
-  const addWallComment = (postId: string, text: string) => { if (!me) return; const post = db.wall.find((w) => w.id === postId); if (!post) return; post.comments.push({ id: uid("cmt"), authorId: me.id, authorName: me.name, text, createdAt: Date.now() }); commit(); };
-  const createGroup = (name: string, course: string) => { if (!me) throw new Error("Sign in first."); const g: StudyGroup = { id: uid("grp"), name, course, ownerId: me.id, inviteCode: referralCode(), memberIds: [me.id], messages: [], createdAt: Date.now() }; db.groups.push(g); commit(); return g; };
+  const addWallPost: StoreApi["addWallPost"] = (p) => { if (!me) throw new Error("Sign in first."); if(!db.wall) db.wall = []; db.wall.unshift({ ...p, id: uid("wall"), authorId: me.id, authorName: me.name, createdAt: Date.now(), comments: [] }); commit(); };
+  const addWallComment = (postId: string, text: string) => { if (!me) return; const post = db.wall.find((w) => w.id === postId); if (!post) return; if(!post.comments) post.comments = []; post.comments.push({ id: uid("cmt"), authorId: me.id, authorName: me.name, text, createdAt: Date.now() }); commit(); };
+  const createGroup = (name: string, course: string) => { if (!me) throw new Error("Sign in first."); if(!db.groups) db.groups = []; const g: StudyGroup = { id: uid("grp"), name, course, ownerId: me.id, inviteCode: referralCode(), memberIds: [me.id], messages: [], createdAt: Date.now() }; db.groups.push(g); commit(); return g; };
   const joinGroup = (code: string) => { if (!me) throw new Error("Sign in first."); const g = db.groups.find((x) => x.inviteCode.toLowerCase() === code.trim().toLowerCase()); if (!g) throw new Error("No group found."); if (!g.memberIds.includes(me.id)) g.memberIds.push(me.id); commit(); return g; };
-  const postGroupMessage: StoreApi["postGroupMessage"] = (groupId, msg) => { if (!me) return; const g = db.groups.find((x) => x.id === groupId); if (!g || !g.memberIds.includes(me.id)) return; g.messages.push({ ...msg, id: uid("gm"), fromId: me.id, createdAt: Date.now() }); commit(); };
-  const openConvo = (otherId: string) => { if (!me) throw new Error("Sign in first."); let c = db.convos.find((x) => x.memberIds.includes(me.id) && x.memberIds.includes(otherId)); if (!c) { c = { id: uid("dm"), memberIds: [me.id, otherId], messages: [], updatedAt: Date.now(), lastRead: { [me.id]: Date.now() } }; db.convos.push(c); commit(); } return c; };
+  const postGroupMessage: StoreApi["postGroupMessage"] = (groupId, msg) => { if (!me) return; const g = db.groups.find((x) => x.id === groupId); if (!g || !g.memberIds.includes(me.id)) return; if(!g.messages) g.messages = []; g.messages.push({ ...msg, id: uid("gm"), fromId: me.id, createdAt: Date.now() }); commit(); };
+  const openConvo = (otherId: string) => { if (!me) throw new Error("Sign in first."); if(!db.convos) db.convos = []; let c = db.convos.find((x) => x.memberIds.includes(me.id) && x.memberIds.includes(otherId)); if (!c) { c = { id: uid("dm"), memberIds: [me.id, otherId], messages: [], updatedAt: Date.now(), lastRead: { [me.id]: Date.now() } }; db.convos.push(c); commit(); } return c; };
   const markConvoRead = (convoId: string) => { if (!me) return; const c = db.convos.find((x) => x.id === convoId); if (!c) return; c.lastRead = { ...(c.lastRead || {}), [me.id]: Date.now() }; commit(); };
-  const sendDm: StoreApi["sendDm"] = (convoId, msg) => { if (!me) return; const c = db.convos.find((x) => x.id === convoId); if (!c) return; c.messages.push({ ...msg, id: uid("msg"), fromId: me.id, createdAt: Date.now() }); c.updatedAt = Date.now(); commit(); };
+  const sendDm: StoreApi["sendDm"] = (convoId, msg) => { if (!me) return; const c = db.convos.find((x) => x.id === convoId); if (!c) return; if(!c.messages) c.messages = []; c.messages.push({ ...msg, id: uid("msg"), fromId: me.id, createdAt: Date.now() }); c.updatedAt = Date.now(); commit(); };
   const forwardDm = (convoId: string, msg: DmMessage, toUserId: string) => { if (!me) return; const dest = openConvo(toUserId); dest.messages.push({ ...msg, id: uid("msg"), fromId: me.id, toId: toUserId, forwardedFrom: msg.fromId, createdAt: Date.now() }); dest.updatedAt = Date.now(); commit(); };
-  const requestPayout = (amountNaira: number) => { if (!me) throw new Error("Sign in first."); if (amountNaira < MIN_WITHDRAWAL_NGN) throw new Error(`Min is ₦${MIN_WITHDRAWAL_NGN}`); if (me.lecturerNaira < amountNaira) throw new Error("Not enough."); me.lecturerNaira -= amountNaira; const p: Payout = { id: uid("pay"), lecturerId: me.id, lecturerName: me.name, amountNaira, status: "pending", createdAt: Date.now() }; db.payouts.push(p); commit(); return p; };
+  const requestPayout = (amountNaira: number) => { if (!me) throw new Error("Sign in first."); if (amountNaira < MIN_WITHDRAWAL_NGN) throw new Error(`Min is ₦${MIN_WITHDRAWAL_NGN}`); if (me.lecturerNaira < amountNaira) throw new Error("Not enough."); me.lecturerNaira -= amountNaira; if(!db.payouts) db.payouts = []; const p: Payout = { id: uid("pay"), lecturerId: me.id, lecturerName: me.name, amountNaira, status: "pending", createdAt: Date.now() }; db.payouts.push(p); commit(); return p; };
 
   const addCredits = async (userId: string, delta: number) => {
     const u = findUser(userId);
