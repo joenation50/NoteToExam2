@@ -33,10 +33,10 @@ export function Cbt() {
 
   // Auto-submit when time runs out
   useEffect(() => {
-    if (timeLeft === 0 && !showResult) {
+    if (timeLeft === 0 && !showResult && pack) {
       handleSubmit();
     }
-  }, [timeLeft, showResult]);
+  }, [timeLeft, showResult, pack]);
 
   if (!pack) return <div className="p-5 text-center font-display">Test not found. Please upload a new note.</div>;
 
@@ -70,12 +70,12 @@ export function Cbt() {
     });
 
     if (me) {
+      // FIX: Removed 'createdAt' from the saveAttempt call
       saveAttempt({
         ownerId: me.id,
         setId: pack.id,
         score,
         total: questions.length,
-        createdAt: Date.now()
       });
       toast("Test submitted successfully.", "ok");
     }
@@ -167,7 +167,7 @@ export function Cbt() {
           <ChevronLeft size={20} />
         </button>
         <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-full border border-ink/5 shadow-sm">
-          <Timer size={16} className={timeLeft < 60 ? "text-red-500 animate-pulse" : "text-terra"} />
+          <Timer size={16} className={timeLeft < 60 ? "text-red-500" : "text-terra"} />
           <span className={`font-display font-bold ${timeLeft < 60 ? "text-red-500" : "text-ink"}`}>
             {formatTime(timeLeft)}
           </span>
