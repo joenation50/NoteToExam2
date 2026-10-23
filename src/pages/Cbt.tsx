@@ -1,251 +1,269 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
-import { toPng } from "html-to-image";
+import { useState, useEffect } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import { ChevronLeft, CheckCircle2, XCircle, Timer, Award, RefreshCw } from "lucide-react";
 import { Seo } from "../components/Seo";
-import { shuffle } from "../lib/id";
 import { useStore } from "../lib/store";
-import type { Question } from "../lib/types";
+import { motion, AnimatePresence } from "framer-motion";
 
 export function Cbt() {
   const { id } = useParams();
-  const { db, me, saveAttempt, touchStreak } = useStore();
   const nav = useNavigate();
+  const { db, saveAttempt, me, toast } = useStore();
   
-  const [customQuestions, setCustomQuestions] = useState<Question[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [progress, setProgress] = useState("");
-  const [error, setError] = useState("");
-
-  const isCustomTest = id === "new-test";
-  const savedSet = db.sets.find((s) => s.id === id && s.ownerId === me?.id);
+  const pack = (db.sets || []).find((s) => s.id === id);
   
-  const bank = useMemo(() => {
-    if (isCustomTest) return shuffle(customQuestions);
-    return savedSet ? shuffle(savedSet.questions.filter((q) => q.format === "mcq")) : [];
-  }, [isCustomTest, customQuestions, savedSet?.id]);
-
-  const [i, setI] = useState(0);
+  const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [picked, setPicked] = useState<string | null>(null);
-  const [secs, setSecs] = useState(0);
-  const [done, setDone] = useState(false);
-  const [opts, setOpts] = useState<string[]>([]);
-  const [shareEl, setShareEl] = useState<HTMLDivElement | null>(null);
-  
-  // Duration: JAMB is 2 hours (120 mins), others are 40 mins
-  const examType = sessionStorage.getItem("cbt_exam_type") || "university";
-  const duration = isCustomTest ? (examType === "jamb" ? 120 * 60 : 40 * 60) : (savedSet?.durationSec || 0);
-  const remaining = duration ? Math.max(0, duration - secs) : secs;
+  const [showResult, setShowResult] = useState(false);
+  const [timeLeft, setTimeLeft] = useState(0);
 
+  // Initialize timer (1 minute per question)
   useEffect(() => {
-    if (!isCustomTest) return;
-    
-    const generateTest = async () => {
-      setLoading(true);
-      setError("");
-      try {
-        const subjectsStr = sessionStorage.getItem("cbt_subjects");
-        if (!subjectsStr) throw new Error("No subjects selected.");
-        const subjects: string[] = JSON.parse(subjectsStr);
-        
-        const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-        if (!apiKey) throw new Error("Gemini API key missing.");
+    if (pack && !showResult) {
+      setTimeLeft(pack.questions.length * 60);
+    }
+  }, [pack, showResult]);
 
-        // 1. Calculate Total Questions
-        const totalQuestions = examType === "jamb" ? 180 : 40;
-        
-        // 2. Distribute Questions
-        const distribution: Record<string, number> = {};
-        if (examType === "jamb" && subjects.includes("English Language")) {
-          // JAMB Logic: English gets 60, others share the rest
-          distribution["English Language"] = 60;
-          const remainingQ = totalQuestions - 60;
-          const otherSubjects = subjects.filter(s => s !== "English Language");
-          const perSubject = Math.floor(remainingQ / otherSubjects.length);
-          otherSubjects.forEach(s => distribution[s] = perSubject);
-        } else {
-          // Normal Logic: Equal distribution
-          const perSubject = Math.floor(totalQuestions / subjects.length);
-          subjects.forEach(s => distribution[s] = perSubject);
-        }
-
-        setProgress(`Generating ${totalQuestions} questions for ${subjects.length} subjects...`);
-
-        // 3. Fetch from AI in Parallel
-        const requests = subjects.map(async (subject) => {
-          const qCount = distribution[subject];
-          const prompt = `You are a strict Nigerian university professor. Generate exactly ${qCount} multiple-choice questions for the subject "${subject}".
-          Return ONLY a JSON array. Do not include markdown or introductory text.
-          Each object must have: { "subject": "${subject}", "prompt": "Question text?", "options": ["A","B","C","D"], "answer": "B", "explanation": "Why?", "format": "mcq", "topic": "General" }`;
-
-          let response;
-          let retries = 3;
-          while (retries > 0) {
-            response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7 } })
-            });
-            if (response.ok) break;
-            if (response.status === 503 || response.status === 429) {
-              await new Promise(res => setTimeout(res, 2000));
-              retries--;
-            } else {
-              throw new Error(`Gemini failed for ${subject}`);
-            }
-          }
-
-          if (!response || !response.ok) throw new Error("Gemini is busy.");
-          const data = await response.json();
-          let textResponse = data.candidates[0].content.parts[0].text;
-          textResponse = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
-          const startIdx = textResponse.indexOf('[');
-          const endIdx = textResponse.lastIndexOf(']');
-          if (startIdx !== -1 && endIdx !== -1) textResponse = textResponse.substring(startIdx, endIdx + 1);
-
-          return JSON.parse(textResponse);
-        });
-
-        // 4. Wait for all subjects to finish and combine
-        const results = await Promise.all(requests);
-        const combinedQuestions = results.flat();
-        
-        if (!Array.isArray(combinedQuestions) || combinedQuestions.length === 0) {
-          throw new Error("No questions generated.");
-        }
-
-        setCustomQuestions(combinedQuestions.map((q: any, index: number) => ({ ...q, id: `q-${index}-${Date.now()}` })));
-      } catch (err: any) {
-        setError(err.message || "Failed to generate test.");
-      } finally {
-        setLoading(false);
-        setProgress("");
-      }
-    };
-    
-    generateTest();
-  }, [isCustomTest, examType]);
-
+  // Countdown timer
   useEffect(() => {
-    if (loading || error || !bank.length || done) return;
-    const t = setInterval(() => setSecs((s) => s + 1), 1000);
-    return () => clearInterval(t);
-  }, [loading, error, bank.length, done]);
+    if (timeLeft <= 0 || showResult) return;
+    const timer = setInterval(() => setTimeLeft((t) => t - 1), 1000);
+    return () => clearInterval(timer);
+  }, [timeLeft, showResult]);
 
+  // Auto-submit when time runs out
   useEffect(() => {
-    if (duration && secs >= duration && !done && bank.length) finish();
-  }, [secs, duration, done, bank.length]);
+    if (timeLeft === 0 && !showResult) {
+      handleSubmit();
+    }
+  }, [timeLeft, showResult]);
 
-  const q: Question | undefined = bank[i];
-  useEffect(() => {
-    if (!q) return;
-    setOpts(shuffle(q.options || []));
-    setPicked(null);
-  }, [q?.id]);
+  if (!pack) return <div className="p-5 text-center font-display">Test not found. Please upload a new note.</div>;
 
-  if (loading) {
-    return (
-      <div className="px-5 pt-20 text-center flex flex-col items-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-terra mb-4"></div>
-        <h2 className="font-display text-2xl font-bold">Building your exam...</h2>
-        <p className="text-ink/50 mt-2">{progress}</p>
-      </div>
-    );
+  const questions = pack.questions || [];
+  const currentQ = questions[currentIndex];
+  const progress = ((currentIndex + 1) / questions.length) * 100;
+
+  function handleSelect(optionText: string) {
+    if (showResult) return;
+    setAnswers((prev) => ({ ...prev, [currentQ.id]: optionText }));
   }
 
-  if (error) return <div className="px-5 pt-10 text-center pb-24"><p className="font-display text-lg text-red-600 font-bold mb-4 bg-red-50 p-4 rounded-xl">{error}</p><Link to="/app/cbt/setup" className="bg-ink text-off px-6 py-3 rounded-xl font-bold">Go Back</Link></div>;
-  if (!bank.length) return <div className="px-5 pt-10"><p className="font-display text-2xl font-bold">No questions found.</p><Link to="/app/cbt/setup" className="text-terra font-bold">Try again</Link></div>;
-
-  const score = bank.filter((x) => answers[x.id] === x.answer).length;
-
-  function choose(opt: string) { if (!q || picked) return; setPicked(opt); setAnswers((a) => ({ ...a, [q.id]: opt })); }
-  function next() { if (!q || !picked) return; if (i + 1 >= bank.length) finish(); else setI(i + 1); }
-  
-  function finish() {
-    if (!me) return;
-    if (savedSet) saveAttempt({ setId: savedSet.id, ownerId: me.id, score: bank.filter((x) => answers[x.id] === x.answer).length, total: bank.length, startedAt: Date.now() - secs * 1000, finishedAt: Date.now(), answers });
-    touchStreak(); setDone(true);
-  }
-
-  async function share() {
-    if (!shareEl) return;
-    try {
-      const dataUrl = await toPng(shareEl, { pixelRatio: 2 });
-      const blob = await (await fetch(dataUrl)).blob();
-      const file = new File([blob], "notetoexam-result.png", { type: "image/png" });
-      const text = `I scored ${score}/${bank.length} on NoteToExam! Built by PrimeWebDesigns.`;
-      
-      if (navigator.share && navigator.canShare?.({ files: [file] })) {
-        await navigator.share({ files: [file], text, title: "NoteToExam Result" });
-      } else {
-        const link = document.createElement("a");
-        link.href = dataUrl;
-        link.download = "notetoexam-result.png";
-        link.click();
-      }
-    } catch (err) {
-      console.error("Share failed", err);
+  function handleNext() {
+    if (currentIndex < questions.length - 1) {
+      setCurrentIndex((i) => i + 1);
     }
   }
 
-  if (done) {
-    const pct = Math.round((score / bank.length) * 100);
+  function handlePrev() {
+    if (currentIndex > 0) {
+      setCurrentIndex((i) => i - 1);
+    }
+  }
+
+  function handleSubmit() {
+    setShowResult(true);
+    let score = 0;
+    
+    questions.forEach((q) => {
+      if (answers[q.id] === q.answer) score++;
+    });
+
+    if (me) {
+      saveAttempt({
+        ownerId: me.id,
+        setId: pack.id,
+        score,
+        total: questions.length,
+        createdAt: Date.now()
+      });
+      toast("Test submitted successfully.", "ok");
+    }
+  }
+
+  function formatTime(sec: number) {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${s < 10 ? "0" : ""}${s}`;
+  }
+
+  // ────────────────────────────────────────────────────────────
+  // RESULTS SCREEN
+  // ────────────────────────────────────────────────────────────
+  if (showResult) {
+    const score = questions.filter((q) => answers[q.id] === q.answer).length;
+    const percent = Math.round((score / questions.length) * 100);
+    
     return (
-      <div className="px-5 pt-6 pb-24">
-        <Seo title="CBT result — NoteToExam" />
-        <h1 className="font-display text-3xl font-bold">Sitting complete.</h1>
-        <p className="text-ink/50 mt-1">Time taken: {fmtClock(secs)}</p>
+      <div className="px-5 pt-5 pb-24 min-h-screen bg-off">
+        <Seo title="CBT Result — NoteToExam" />
         
-        <div ref={setShareEl} className="mt-5 rounded-[28px] overflow-hidden relative text-off p-6 bg-ink flex flex-col items-center justify-center text-center shadow-2xl">
-          <p className="font-display text-[11px] tracking-[0.22em] uppercase text-terra mb-2">NoteToExam</p>
-          <p className="font-display text-6xl font-bold mb-2">{pct}%</p>
-          <p className="text-white/60">Score: {score} / {bank.length}</p>
-          <p className="text-white/60">Time: {fmtClock(secs)}</p>
+        <div className="text-center mt-10">
+          <div className="inline-flex h-24 w-24 bg-terra/10 rounded-full items-center justify-center mb-4">
+            <Award size={48} className="text-terra" />
+          </div>
+          <h1 className="font-display text-3xl font-bold">Test Complete!</h1>
+          <p className="text-ink/50 mt-2">You scored {score} out of {questions.length}</p>
           
-          <div className="mt-6 pt-4 border-t border-white/10 w-full flex flex-col items-center">
-            <p className="font-display font-bold text-lg">{me?.name || "Student"}</p>
-            <p className="text-xs text-terra mt-1">Built by PrimeWebDesigns</p>
+          <div className="mt-6 bg-white rounded-3xl p-6 border border-ink/5 shadow-sm max-w-sm mx-auto">
+            <p className="text-5xl font-display font-bold text-sage">{percent}%</p>
+            <p className="text-sm text-ink/40 uppercase tracking-widest font-bold mt-2">Accuracy</p>
           </div>
         </div>
-        
-        <button type="button" onClick={() => void share()} className="press mt-4 w-full rounded-full bg-sage text-ink font-display font-bold py-3">Share Result</button>
-        <button type="button" onClick={() => nav(`/app`)} className="press mt-2 w-full rounded-full bg-ink text-off font-display font-bold py-3">Back to Dashboard</button>
+
+        <div className="mt-8 space-y-4">
+          <h2 className="font-display font-bold text-lg">Review Answers</h2>
+          {questions.map((q, i) => {
+            const isCorrect = answers[q.id] === q.answer;
+            const userAnswer = answers[q.id];
+            return (
+              <div key={q.id} className="bg-white rounded-2xl p-5 border border-ink/5 shadow-sm">
+                <div className="flex gap-3">
+                  <div className="shrink-0 mt-1">
+                    {isCorrect ? <CheckCircle2 size={20} className="text-sage" /> : <XCircle size={20} className="text-red-500" />}
+                  </div>
+                  <div className="flex-1">
+                    <p className="font-display font-bold leading-tight">Q{i + 1}: {q.prompt}</p>
+                    <div className="mt-3 text-sm space-y-1">
+                      <p className={isCorrect ? "text-sage font-bold" : "text-red-500 font-bold"}>
+                        Your answer: {userAnswer || "Skipped"}
+                      </p>
+                      {!isCorrect && (
+                        <p className="text-sage font-bold">
+                          Correct answer: {q.answer}
+                        </p>
+                      )}
+                      <p className="text-ink/50 mt-2 text-xs italic">{q.explanation}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="flex gap-3 mt-8">
+          <button onClick={() => { setShowResult(false); setCurrentIndex(0); setAnswers({}); }} className="press flex-1 bg-white border border-ink/10 text-ink font-display font-bold py-4 rounded-2xl shadow-sm flex items-center justify-center gap-2">
+            <RefreshCw size={18} /> Retake
+          </button>
+          <button onClick={() => nav("/app/library")} className="press flex-1 bg-ink text-off font-display font-bold py-4 rounded-2xl shadow-lg">
+            Back to Library
+          </button>
+        </div>
       </div>
     );
   }
 
+  // ────────────────────────────────────────────────────────────
+  // TEST SCREEN
+  // ────────────────────────────────────────────────────────────
   return (
-    <div className="px-5 pt-4 pb-24">
-      <Seo title="CBT Simulator — NoteToExam" />
-      <div className="flex items-center justify-between">
-        <p className="font-display text-sm text-ink/50">{i + 1} / {bank.length}</p>
-        <p className="font-display font-bold tabular-nums text-terra">{fmtClock(duration ? remaining : secs)}</p>
-      </div>
-      <div className="h-1.5 bg-ink/10 rounded-full mt-3"><div className="h-full bg-terra rounded-full" style={{ width: `${((i + (picked ? 1 : 0)) / bank.length) * 100}%` }} /></div>
+    <div className="px-5 pt-5 pb-24 min-h-screen bg-off flex flex-col">
+      <Seo title="CBT Test — NoteToExam" />
       
-      <h1 className="font-display text-xl font-bold mt-6 leading-snug">{q.prompt}</h1>
-      <div className="mt-5 space-y-2">
-        {opts.map((o, idx) => {
-          const state = !picked ? "" : o === q.answer ? "ring-2 ring-sage bg-sage/20" : o === picked ? "ring-2 ring-terra bg-terra/15" : "opacity-50";
-          return <button key={o} type="button" onClick={() => choose(o)} className={`press w-full text-left rounded-2xl bg-white px-4 py-4 font-display font-semibold ${state}`}><span className="text-terra mr-2">{String.fromCharCode(65 + idx)}.</span>{o}</button>;
-        })}
-      </div>
-
-      <div className="mt-6 flex gap-2">
-        <button type="button" onClick={finish} className="press w-full rounded-xl bg-gray-200 text-ink/70 font-display font-bold py-3 text-sm">
-          Submit Test Early
+      {/* HEADER */}
+      <div className="flex items-center justify-between mb-4">
+        <button onClick={() => nav(-1)} className="press h-10 w-10 bg-white rounded-full grid place-items-center shadow-sm border border-ink/5">
+          <ChevronLeft size={20} />
         </button>
+        <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-full border border-ink/5 shadow-sm">
+          <Timer size={16} className={timeLeft < 60 ? "text-red-500 animate-pulse" : "text-terra"} />
+          <span className={`font-display font-bold ${timeLeft < 60 ? "text-red-500" : "text-ink"}`}>
+            {formatTime(timeLeft)}
+          </span>
+        </div>
       </div>
 
-      {picked && (
-        <div className="mt-4 rounded-[24px] bg-ink text-off p-4 mb-8">
-          <p className="font-display font-bold">{picked === q.answer ? "Correct" : "Not this one"}</p>
-          <p className="text-sm text-white/70 mt-1">{q.explanation}</p>
-          <button type="button" onClick={next} className="press mt-4 w-full rounded-full bg-terra text-ink font-display font-bold py-3">{i + 1 >= bank.length ? "See score" : "Next Question"}</button>
+      {/* PROGRESS */}
+      <div className="mb-6">
+        <div className="flex justify-between text-xs font-bold text-ink/40 mb-2 uppercase tracking-widest">
+          <span>Question {currentIndex + 1} of {questions.length}</span>
+          <span>{Math.round(progress)}%</span>
         </div>
-      )}
+        <div className="h-2 bg-ink/5 rounded-full overflow-hidden">
+          <div className="h-full bg-terra transition-all duration-300" style={{ width: `${progress}%` }} />
+        </div>
+      </div>
+
+      {/* QUESTION CARD */}
+      <AnimatePresence mode="wait">
+        <motion.div 
+          key={currentQ.id}
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -20 }}
+          className="flex-1"
+        >
+          <div className="bg-white rounded-3xl p-6 shadow-sm border border-ink/5 mb-6">
+            <p className="text-[10px] uppercase tracking-widest font-bold text-terra mb-3">
+              {currentQ.format === "theory" ? "Theory Question" : "Objective Question"}
+            </p>
+            <h2 className="font-display text-xl font-bold leading-snug">{currentQ.prompt}</h2>
+
+            {currentQ.format === "mcq" && currentQ.options && (
+              <div className="mt-6 space-y-3">
+                {currentQ.options.map((opt, i) => {
+                  const isSelected = answers[currentQ.id] === opt;
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => handleSelect(opt)}
+                      className={`w-full text-left p-4 rounded-2xl border-2 transition-all flex items-center gap-3 ${
+                        isSelected 
+                          ? "border-terra bg-terra/5 text-ink font-bold" 
+                          : "border-ink/5 hover:border-ink/20 text-ink/70"
+                      }`}
+                    >
+                      <span className={`h-6 w-6 rounded-full border-2 grid place-items-center text-xs ${
+                        isSelected ? "border-terra text-terra" : "border-ink/20 text-transparent"
+                      }`}>
+                        {isSelected && <div className="h-3 w-3 bg-terra rounded-full" />}
+                      </span>
+                      {opt}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {currentQ.format === "theory" && (
+              <textarea 
+                value={answers[currentQ.id] || ""}
+                onChange={(e) => handleSelect(e.target.value)}
+                placeholder="Type your answer here..."
+                className="mt-6 w-full h-32 bg-off rounded-2xl p-4 border border-ink/10 outline-none focus:border-terra resize-none"
+              />
+            )}
+          </div>
+        </motion.div>
+      </AnimatePresence>
+
+      {/* FOOTER CONTROLS */}
+      <div className="flex gap-3 mt-auto">
+        <button 
+          onClick={handlePrev} 
+          disabled={currentIndex === 0}
+          className="press h-14 w-14 shrink-0 bg-white border border-ink/10 rounded-2xl grid place-items-center font-display font-bold disabled:opacity-30"
+        >
+          <ChevronLeft size={20} />
+        </button>
+        
+        {currentIndex === questions.length - 1 ? (
+          <button 
+            onClick={handleSubmit} 
+            className="press flex-1 bg-ink text-off font-display font-bold rounded-2xl shadow-lg shadow-ink/20"
+          >
+            Submit Test
+          </button>
+        ) : (
+          <button 
+            onClick={handleNext} 
+            className="press flex-1 bg-terra text-ink font-display font-bold rounded-2xl shadow-lg shadow-terra/20"
+          >
+            Next Question
+          </button>
+        )}
+      </div>
     </div>
   );
 }
-
-function fmtClock(s: number) { const m = Math.floor(s / 60); const r = s % 60; return `${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`; }
