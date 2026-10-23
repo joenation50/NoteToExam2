@@ -51,12 +51,16 @@ export function Dashboard() {
 
   const latestMessages = useMemo(() => {
     const rows: { id: string; from: string; text: string; t: number; href: string }[] = [];
+    
+    // SAFETY FIX: (db.convos || []) and (c.messages || [])
     (db.convos || []).forEach(c => {
       if (!c.memberIds?.includes(me.id) || !c.messages?.length) return;
       const last = c.messages[c.messages.length - 1];
       const other = (db.users || []).find((u) => u.id === c.memberIds.find((id) => id !== me.id));
       rows.push({ id: last.id, from: other?.name || "DM", text: last.kind === "text" ? last.text : "Media", t: last.createdAt, href: "/app/messages" });
     });
+
+    // SAFETY FIX: (db.groups || []) and (g.messages || [])
     (db.groups || []).forEach(g => {
       if (!g.memberIds?.includes(me.id) || !g.messages?.length) return;
       const last = g.messages[g.messages.length - 1];
@@ -66,6 +70,7 @@ export function Dashboard() {
     return rows.sort((a, b) => b.t - a.t).slice(0, 3);
   }, [me, db.convos, db.groups, db.users]);
 
+  // SAFETY FIX: Added `|| {}` to me.weakTopics
   const weak = Object.entries(me.weakTopics || {}).sort((a, b) => b[1] - a[1])[0];
   const weeklyTip = weak ? `You missed ${weak[0]} ${weak[1]} times. Drill that topic.` : "Keep the streak alive!";
 
@@ -79,7 +84,6 @@ export function Dashboard() {
         me: me!, canGenerate, addCredits, recordGeneration, refundCredits, uploadNote, saveSet, touchStreak, onProgress: setProgress,
       });
 
-      // SAFETY CHECK: Prevent crash if AI fails
       if (!result || !result.set || !result.set.id) {
         throw new Error("The AI failed to create a valid pack. Please try another file.");
       }
