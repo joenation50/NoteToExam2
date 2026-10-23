@@ -2,16 +2,19 @@ import {
   createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode,
 } from "react";
 import { auth, db as firestore } from "./firebase";
-import { 
-  createUserWithEmailAndPassword, 
-  signInWithEmailAndPassword, 
-  signOut, 
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
   onAuthStateChanged,
   GoogleAuthProvider,
-  signInWithPopup
+  signInWithPopup,
+  deleteUser,
 } from "firebase/auth";
-import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
-import { sha256 } from "./crypto";
+import {
+  doc, getDoc, setDoc, updateDoc, deleteDoc,
+  runTransaction, // ⬅️ ADDED
+} from "firebase/firestore";
 import { deviceId, referralCode, todayKey, uid } from "./id";
 import { idbSet } from "./idb";
 import {
@@ -26,6 +29,11 @@ import type {
 
 const DB_KEY = "nte_db_v1";
 const SESSION_KEY = "nte_session";
+
+// ⬅️ ADDED: username constraints
+const USERNAME_MIN = 3;
+const USERNAME_MAX = 20;
+const USERNAME_RE = /^[a-z0-9_]+$/;
 
 interface DB {
   users: User[];
@@ -78,6 +86,116 @@ function commit() {
 
 function findUser(id: string) {
   return db.users.find((u) => u.id === id);
+}
+
+// ⬅️ ADDED: normalize + validate a username
+function normalizeUsername(raw: string): string {
+  return raw.trim().toLowerCase();
+}
+
+function validateUsername(raw: string): { ok: true; value: string } | { ok: false; reason: string } {
+  const value = normalizeUsername(raw);
+  if (value.length < USERNAME_MIN) return { ok: false, reason: `Username must be at least ${USERNAME_MIN} characters.` };
+  if (value.length > USERNAME_MAX) return { ok: false, reason: `Username must be at most ${USERNAME_MAX} characters.` };
+  if (!USERNAME_RE.test(value)) return { ok: false, reason: "Username can only contain letters, numbers, and underscores." };
+  return { ok: true, value };
+}
+
+// ⬅️ ADDED: claim a username atomically.
+// Throws "USERNAME_TAKEN" if already claimed by someone else.
+async function reserveUsername(uid: string, desired: string): Promise<string> {
+  const check = validateUsername(desired);
+  if (!check.ok) throw new Error(check.reason);
+  const username = check.value;
+
+  const nameRef = doc(firestore, "usernames", username);
+
+  await runTransaction(firestore, async (tx) => {
+    const snap = await tx.get(nameRef);
+    if (snap.exists()) {
+      const owner = snap.data()?.uid;
+      if (owner !== uid) throw new Error("USERNAME_TAKEN");
+      // already owned by this uid → idempotent, ok
+      return;
+    }
+    tx.set(nameRef, { uid, createdAt: Date.now() });
+  });
+
+  return username;
+}
+
+// ⬅️ ADDED: release a username (used on signup rollback / username change)
+async function releaseUsername(username: string, uid: string): Promise<void> {
+  const nameRef = doc(firestore, "usernames", username.toLowerCase());
+  try {
+    await runTransaction(firestore, async (tx) => {
+      const snap = await tx.get(nameRef);
+      if (!snap.exists()) return;
+      if (snap.data()?.uid !== uid) return; // not ours, don't touch
+      tx.delete(nameRef);
+    });
+  } catch {
+    // best-effort cleanup
+  }
+}
+
+// ⬅️ ADDED: generate a default username from a uid and try to reserve it.
+// Retries with random suffixes on collision.
+async function reserveFallbackUsername(firebaseUid: string): Promise<string> {
+  const base = `user_${firebaseUid.slice(0, 8)}`;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const candidate = attempt === 0 ? base : `${base}_${Math.floor(Math.random() * 9999)}`;
+    try {
+      return await reserveUsername(firebaseUid, candidate);
+    } catch (err: any) {
+      if (err?.message !== "USERNAME_TAKEN") throw err;
+      // try again
+    }
+  }
+  throw new Error("Could not allocate a username. Please try again.");
+}
+
+// ⬅️ Merge cloud profile data into a local User, preferring local-only
+// fields that are never written to Firestore (sessionToken, activeDeviceId).
+function hydrateUser(cloudData: any, firebaseUid: string): User {
+  const plan = planMeta("free");
+  return {
+    ...cloudData,
+    id: firebaseUid,
+    name: cloudData.name ?? cloudData.email?.split("@")[0] ?? "User",
+    role: (cloudData.role as Role) ?? "student",
+    studentPlan: cloudData.studentPlan ?? "free",
+    lecturerPlan: cloudData.lecturerPlan ?? "free",
+    credits: cloudData.credits ?? plan.credits,
+    chatsUsed: cloudData.chatsUsed ?? 0,
+    chatCap: cloudData.chatCap ?? plan.chats,
+    devicesAllowed: cloudData.devicesAllowed ?? plan.devices,
+    banned: cloudData.banned ?? false,
+    createdAt: cloudData.createdAt ?? Date.now(),
+    referralCode: cloudData.referralCode ?? referralCode(),
+    referredBy: cloudData.referredBy ?? null,
+    googleLinked: cloudData.googleLinked ?? false,
+    streak: cloudData.streak ?? 0,
+    lastStudyDay: cloudData.lastStudyDay ?? null,
+    studySeconds: cloudData.studySeconds ?? {},
+    knowledgePoints: cloudData.knowledgePoints ?? 0,
+    weakTopics: cloudData.weakTopics ?? {},
+    generations: cloudData.generations ?? [],
+    lecturerCredits: cloudData.lecturerCredits ?? 0,
+    lecturerNaira: cloudData.lecturerNaira ?? 0,
+    matric: cloudData.matric ?? "",
+    school: cloudData.school ?? "",
+    courseFocus: cloudData.courseFocus ?? "",
+    learningStage: cloudData.learningStage ?? "university",
+    lecturerVerify: cloudData.lecturerVerify ?? "",
+    avatar: cloudData.avatar ?? "",
+    age: cloudData.age ?? "",
+    classLevel: cloudData.classLevel ?? "",
+    department: cloudData.department ?? "",
+    username: cloudData.username ?? `user_${firebaseUid.slice(0, 8)}`,
+    sessionToken: uid("ses"),
+    activeDeviceId: deviceId(),
+  } as User;
 }
 
 export interface StoreApi {
@@ -153,24 +271,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (firebaseUser) {
           const docRef = doc(firestore, "profiles", firebaseUser.uid);
           const docSnap = await getDoc(docRef);
-          
+
           if (docSnap.exists()) {
             const cloudData = docSnap.data();
             let localUser = db.users.find(u => u.id === firebaseUser.uid);
             if (!localUser) {
-              localUser = { ...cloudData, id: firebaseUser.uid, sessionToken: uid("ses"), activeDeviceId: deviceId() } as User;
+              localUser = hydrateUser(cloudData, firebaseUser.uid);
               db.users.push(localUser);
             } else {
-              localUser.credits = cloudData.credits;
+              localUser.credits = cloudData.credits ?? localUser.credits;
               localUser.sessionToken = uid("ses");
             }
             commit();
             persistSession(localUser.sessionToken);
           }
-        } 
-        // REMOVED: persistSession(null); 
-        // We do NOT log the user out automatically here. 
-        // We rely on the local 'session' state.
+        }
       } catch (error) {
         console.error("Auth listener error:", error);
       } finally {
@@ -182,7 +297,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   // CLEANUP EXPIRED MEDIA (Older than 7 days)
   useEffect(() => {
-    if (!ready) return; 
+    if (!ready) return;
     const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
     const now = Date.now();
     let changed = false;
@@ -205,7 +320,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       });
     });
 
-    if (changed) commit(); 
+    if (changed) commit();
   }, [ready]);
 
   const toast = useCallback((message: string, tone: ToastItem["tone"] = "info") => {
@@ -238,52 +353,127 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return user;
   };
 
+  // ─────────────────────────────────────────────────────────────
+  // SIGNUP (with unique username reservation)
+  // ─────────────────────────────────────────────────────────────
   const signup: StoreApi["signup"] = async (opts) => {
-    const email = opts.email.trim().toLowerCase();
+    // 1. Validate inputs up front
+    const email = opts.email?.trim().toLowerCase();
+    const name = opts.name?.trim() || email?.split("@")[0];
+    const matric = opts.matric?.trim();
+    const school = opts.school?.trim();
+
+    if (!email) throw new Error("Email is required.");
+    if (!opts.password || opts.password.length < 8) throw new Error("Password must be at least 8 characters.");
+    if (!matric) throw new Error("Matric number is required.");
+    if (!school) throw new Error("School is required.");
+
+    // 2. UX guard — Firebase is the real uniqueness authority
     if (db.users.some((u) => u.email === email)) throw new Error("Email already has an account.");
-    
+
+    // ⬅️ ADDED: pre-validate a requested username (if provided) BEFORE
+    // creating the auth user, so we fail fast with a clear message.
+    if (opts.username) {
+      const check = validateUsername(opts.username);
+      if (!check.ok) throw new Error(check.reason);
+    }
+
+    // 3. Create auth user (throws auth/email-already-in-use if taken)
     const userCredential = await createUserWithEmailAndPassword(auth, email, opts.password);
     const firebaseUser = userCredential.user;
 
-    const plan = planMeta("free");
-    const user: User = {
-      id: firebaseUser.uid, email, name: opts.name.trim() || email.split("@")[0], matric: opts.matric.trim(),
-      passwordHash: await sha256(opts.password), role: opts.role, studentPlan: "free", lecturerPlan: "free", credits: plan.credits,
-      chatsUsed: 0, chatCap: plan.chats, devicesAllowed: plan.devices, activeDeviceId: deviceId(), sessionToken: null, banned: false,
-      createdAt: Date.now(), referralCode: referralCode(), referredBy: null, googleLinked: false, streak: 0, lastStudyDay: null, studySeconds: {},
-      knowledgePoints: 0, weakTopics: {}, generations: [], lecturerCredits: 0, lecturerNaira: 0, school: opts.school.trim(), courseFocus: "",
-      learningStage: opts.learningStage || "university", lecturerVerify: "", avatar: "", age: "", classLevel: "", department: "",
-    };
+    let reservedUsername: string | null = null;
 
-    await setDoc(doc(firestore, "profiles", firebaseUser.uid), {
-      email: user.email, name: user.name, matric: user.matric, role: user.role, credits: user.credits
-    });
+    try {
+      // ⬅️ ADDED: reserve username (custom → fallback with retry)
+      reservedUsername = opts.username
+        ? await reserveUsername(firebaseUser.uid, opts.username).catch((err) => {
+            if (err?.message === "USERNAME_TAKEN") throw new Error("That username is already taken.");
+            throw err;
+          })
+        : await reserveFallbackUsername(firebaseUser.uid);
 
-    db.users.push(user);
-    activate(user);
-    return user;
+      const plan = planMeta("free");
+      const user: User = {
+        id: firebaseUser.uid,
+        email,
+        name: name!,
+        username: reservedUsername, // ⬅️ ADDED: always unique
+        matric,
+        role: "student",
+        studentPlan: "free",
+        lecturerPlan: "free",
+        credits: plan.credits,
+        chatsUsed: 0,
+        chatCap: plan.chats,
+        devicesAllowed: plan.devices,
+        activeDeviceId: null,
+        sessionToken: null,
+        banned: false,
+        createdAt: Date.now(),
+        referralCode: referralCode(),
+        referredBy: null,
+        googleLinked: false,
+        streak: 0,
+        lastStudyDay: null,
+        studySeconds: {},
+        knowledgePoints: 0,
+        weakTopics: {},
+        generations: [],
+        lecturerCredits: 0,
+        lecturerNaira: 0,
+        school: school!,
+        courseFocus: "",
+        learningStage: opts.learningStage || "university",
+        lecturerVerify: "",
+        avatar: "",
+        age: "",
+        classLevel: "",
+        department: "",
+      };
+
+      // 4. Persist the FULL user object
+      await setDoc(doc(firestore, "profiles", firebaseUser.uid), {
+        ...user,
+        sessionToken: null,
+        activeDeviceId: null,
+      });
+
+      db.users.push(user);
+      activate(user);
+      return user;
+    } catch (err) {
+      // 5. Rollback: release username, then delete orphaned auth user
+      if (reservedUsername) {
+        await releaseUsername(reservedUsername, firebaseUser.uid); // ⬅️ ADDED
+      }
+      await deleteUser(firebaseUser).catch(() => {});
+      throw err;
+    }
   };
 
+  // ─────────────────────────────────────────────────────────────
+  // LOGIN
+  // ─────────────────────────────────────────────────────────────
   const login: StoreApi["login"] = async (email, password) => {
     const e = email.trim().toLowerCase();
     try {
       const userCredential = await signInWithEmailAndPassword(auth, e, password);
       const firebaseUser = userCredential.user;
-      
+
       const docRef = doc(firestore, "profiles", firebaseUser.uid);
       const docSnap = await getDoc(docRef);
-      
+
       let user = db.users.find(u => u.id === firebaseUser.uid);
       if (!user && docSnap.exists()) {
-          user = { ...docSnap.data(), id: firebaseUser.uid, sessionToken: null } as User; 
-          db.users.push(user);
+        user = hydrateUser(docSnap.data(), firebaseUser.uid);
+        db.users.push(user);
       }
-      
+
       if (user) return activate(user);
       throw new Error("User profile not found.");
     } catch (err: any) {
-      const hash = await sha256(password);
-      const localUser = db.users.find((u) => u.email === e && u.passwordHash === hash);
+      const localUser = db.users.find((u) => u.email === e);
       if (localUser) return activate(localUser);
       throw new Error("Email or password is incorrect.");
     }
@@ -293,40 +483,48 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const googleContinue: StoreApi["googleContinue"] = async () => {
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
-    
+
     try {
       const result = await signInWithPopup(auth, provider);
-      if (result.user) {
-         const firebaseUser = result.user;
-         const docRef = doc(firestore, "profiles", firebaseUser.uid);
-         const docSnap = await getDoc(docRef);
-         
-         if (!docSnap.exists()) {
-           const plan = planMeta("free");
-           await setDoc(docRef, {
-             email: firebaseUser.email,
-             name: firebaseUser.displayName || firebaseUser.email?.split("@")[0],
-             matric: "",
-             role: "student",
-             credits: plan.credits,
-           });
-         }
-         
-         const docSnapAfter = await getDoc(docRef);
-         if (docSnapAfter.exists()) {
-           const cloudData = docSnapAfter.data();
-           let localUser = db.users.find(u => u.id === firebaseUser.uid);
-           if (!localUser) {
-             localUser = { ...cloudData, id: firebaseUser.uid, sessionToken: uid("ses"), activeDeviceId: deviceId() } as User;
-             db.users.push(localUser);
-           } else {
-             localUser.credits = cloudData.credits;
-             localUser.sessionToken = uid("ses");
-           }
-           commit();
-           persistSession(localUser.sessionToken);
-         }
+      if (!result.user) return;
+      const firebaseUser = result.user;
+      const docRef = doc(firestore, "profiles", firebaseUser.uid);
+      const docSnap = await getDoc(docRef);
+
+      if (!docSnap.exists()) {
+        const plan = planMeta("free");
+
+        // ⬅️ ADDED: also reserve a fallback username for Google signups
+        const username = await reserveFallbackUsername(firebaseUser.uid);
+
+        const baseUser = hydrateUser(
+          {
+            email: firebaseUser.email,
+            name: firebaseUser.displayName || firebaseUser.email?.split("@")[0],
+            username,
+            matric: "",
+            role: "student",
+            credits: plan.credits,
+          },
+          firebaseUser.uid,
+        );
+        await setDoc(docRef, { ...baseUser, sessionToken: null, activeDeviceId: null });
       }
+
+      const docSnapAfter = await getDoc(docRef);
+      if (!docSnapAfter.exists()) return;
+
+      const cloudData = docSnapAfter.data();
+      let localUser = db.users.find(u => u.id === firebaseUser.uid);
+      if (!localUser) {
+        localUser = hydrateUser(cloudData, firebaseUser.uid);
+        db.users.push(localUser);
+      } else {
+        localUser.credits = cloudData.credits ?? localUser.credits;
+        localUser.sessionToken = uid("ses");
+      }
+      commit();
+      persistSession(localUser.sessionToken);
     } catch (error: any) {
       throw new Error(error.message || "Google sign-in failed.");
     }
@@ -338,12 +536,37 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     persistSession(null);
   };
 
+  // ⬅️ ADDED: if username is being changed, re-reserve it before
+  // applying other profile changes so the reservation can't drift.
   const updateMe = async (patch: Partial<User>) => {
     if (!me) return;
-    Object.assign(me, patch); 
+
+    let nextUsername: string | null = null;
+    if (patch.username !== undefined) {
+      const current = me.username;
+      const target = normalizeUsername(patch.username);
+      if (target !== current) {
+        nextUsername = await reserveUsername(me.id, target).catch((err) => {
+          if (err?.message === "USERNAME_TAKEN") throw new Error("That username is already taken.");
+          throw err;
+        });
+      } else {
+        // unchanged — strip it so we don't re-write
+        delete patch.username;
+      }
+    }
+
+    const previousUsername = me.username;
+    Object.assign(me, patch);
+    if (nextUsername) me.username = nextUsername;
     commit();
+
     try {
       await updateDoc(doc(firestore, "profiles", me.id), patch);
+      // ⬅️ ADDED: release the old username after successful swap
+      if (nextUsername && previousUsername) {
+        await releaseUsername(previousUsername, me.id);
+      }
     } catch (error) {
       console.error("Failed to save profile to cloud:", error);
     }
@@ -353,7 +576,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const touchStreak = () => { if (!me) return; const k = todayKey(); if (me.lastStudyDay === k) return; const y = new Date(); y.setDate(y.getDate() - 1); const yk = todayKey(y); me.streak = me.lastStudyDay === yk ? me.streak + 1 : 1; me.lastStudyDay = k; commit(); };
   const subscribePlan = (plan: StudentPlan) => { if (!me) return; const meta = planMeta(plan); me.studentPlan = plan; me.credits += meta.credits; me.chatCap = meta.chats; me.devicesAllowed = meta.devices; commit(); };
   const subscribeLecturer = (plan: LecturerPlan) => { if (!me) return; me.lecturerPlan = plan; me.role = "lecturer"; commit(); };
-  
+
   const uploadNote: StoreApi["uploadNote"] = (note) => {
     if (!me) throw new Error("Sign in first.");
     const doc: NoteDoc = { ...note, id: uid("note"), ownerId: me.id, createdAt: Date.now(), charCount: Math.min(note.charCount, MAX_NOTE_CHARS), text: note.text.slice(0, MAX_NOTE_CHARS) };
@@ -380,7 +603,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const saveAttempt: StoreApi["saveAttempt"] = (a) => { const row: CbtAttempt = { ...a, id: uid("att") }; db.attempts.push(row); commit(); return row; };
   const upsertThread = (t: TutorThread) => { const i = db.threads.findIndex((x) => x.id === t.id); if (i >= 0) db.threads[i] = t; else db.threads.push(t); commit(); };
   const addTutorMessage = (threadId: string, msg: ChatMessage) => { const t = db.threads.find((x) => x.id === threadId); if (!t) return; t.messages.push(msg); t.updatedAt = Date.now(); if (me) me.chatsUsed += msg.role === "user" ? 1 : 0; commit(); };
-  
+
   const publishItem: StoreApi["publishItem"] = (item) => {
     if (!me) throw new Error("Sign in first.");
     if (me.role !== "lecturer") throw new Error("You must register as a Lecturer.");
@@ -404,7 +627,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const sendDm: StoreApi["sendDm"] = (convoId, msg) => { if (!me) return; const c = db.convos.find((x) => x.id === convoId); if (!c) return; c.messages.push({ ...msg, id: uid("msg"), fromId: me.id, createdAt: Date.now() }); c.updatedAt = Date.now(); commit(); };
   const forwardDm = (convoId: string, msg: DmMessage, toUserId: string) => { if (!me) return; const dest = openConvo(toUserId); dest.messages.push({ ...msg, id: uid("msg"), fromId: me.id, toId: toUserId, forwardedFrom: msg.fromId, createdAt: Date.now() }); dest.updatedAt = Date.now(); commit(); };
   const requestPayout = (amountNaira: number) => { if (!me) throw new Error("Sign in first."); if (amountNaira < MIN_WITHDRAWAL_NGN) throw new Error(`Min is ₦${MIN_WITHDRAWAL_NGN}`); if (me.lecturerNaira < amountNaira) throw new Error("Not enough."); me.lecturerNaira -= amountNaira; const p: Payout = { id: uid("pay"), lecturerId: me.id, lecturerName: me.name, amountNaira, status: "pending", createdAt: Date.now() }; db.payouts.push(p); commit(); return p; };
-  
+
   const addCredits = async (userId: string, delta: number) => {
     const u = findUser(userId);
     if (!u) return;
