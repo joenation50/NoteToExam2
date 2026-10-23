@@ -1,11 +1,10 @@
 import { useState, useRef } from "react";
-import { motion, type Variants } from "framer-motion"; // Import Variants
+import { motion, type Variants } from "framer-motion";
 import { 
   User, School, BookOpen, GraduationCap, 
   CheckCircle2, LogOut, Shield, 
   Smartphone, Calendar, Sparkles, Camera
 } from "lucide-react";
-import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { Seo } from "../components/Seo";
 import { useStore } from "../lib/store";
 
@@ -15,30 +14,28 @@ export function Settings() {
   
   const [username, setUsername] = useState(me?.username || "");
   const [isSaving, setIsSaving] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
 
-  // Handle Image Upload - FIXED: Using me?.id
-  async function handleImageUpload(e: React.ChangeEvent<HTMLInputElement>) {
+  // Handle Image Upload using Base64 (Same as Profile page!)
+  function handleImageUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
+    e.target.value = ""; // Reset input
     if (!file || !me) return;
-    if (file.size > 5 * 1024 * 1024) return toast("Image too large. Max 5MB.", "err");
 
-    setIsUploading(true);
-    try {
-      const storage = getStorage();
-      const imageRef = ref(storage, `avatars/${me.id}`); // TypeScript is happy now
-      
-      await uploadBytes(imageRef, file);
-      const downloadURL = await getDownloadURL(imageRef);
-      
-      await updateMe({ avatar: downloadURL });
-      toast("Profile picture updated!", "ok");
-    } catch (err: any) {
-      console.error(err);
-      toast("Failed to upload image.", "err");
-    } finally {
-      setIsUploading(false);
+    // Safety check: Compress/limit size to avoid Firestore 1MB limit
+    if (file.size > 800 * 1024) {
+      return toast("Image must be smaller than 800KB to save to the database.", "err");
     }
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        await updateMe({ avatar: String(reader.result) });
+        toast("Profile picture updated!", "ok");
+      } catch (err) {
+        toast("Failed to save image.", "err");
+      }
+    };
+    reader.readAsDataURL(file);
   }
 
   async function handleSave(e: React.FormEvent<HTMLFormElement>) {
@@ -65,7 +62,7 @@ export function Settings() {
     }
   }
 
-  // Animation variants - FIXED: Added 'as const' to transition type
+  // Animation variants
   const container: Variants = { 
     hidden: { opacity: 0 }, 
     show: { opacity: 1, transition: { staggerChildren: 0.05 } } 
@@ -76,7 +73,7 @@ export function Settings() {
     show: { opacity: 1, y: 0, transition: { type: "spring" as const, stiffness: 300, damping: 24 } } 
   };
 
-  if (!me) return null; // This needs to stay after the hooks
+  if (!me) return null;
 
   return (
     <motion.div 
@@ -98,7 +95,6 @@ export function Settings() {
         <button 
           type="button"
           onClick={() => fileRef.current?.click()}
-          disabled={isUploading}
           className="press relative h-28 w-28 rounded-full bg-white border-4 border-white shadow-lg overflow-hidden group"
         >
           {me.avatar ? (
@@ -112,15 +108,9 @@ export function Settings() {
           <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
             <Camera size={24} className="text-white" />
           </div>
-          
-          {isUploading && (
-            <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
-              <span className="animate-spin h-6 w-6 border-2 border-white border-t-transparent rounded-full" />
-            </div>
-          )}
         </button>
         <p className="text-[10px] uppercase font-bold text-ink/40 tracking-widest mt-3">
-          {isUploading ? "Uploading..." : "Tap to change picture"}
+          Tap to change picture
         </p>
       </motion.div>
 
@@ -189,7 +179,7 @@ export function Settings() {
             variants={item}
             whileTap={{ scale: 0.95 }}
             type="submit" 
-            disabled={isSaving || isUploading}
+            disabled={isSaving}
             className="w-full flex items-center justify-center gap-2 rounded-2xl bg-ink text-off font-display font-bold py-4 mt-6 shadow-lg shadow-ink/20 disabled:opacity-70 transition-all"
           >
             {isSaving ? "Saving..." : <><CheckCircle2 size={18} /> Save Profile</>}
