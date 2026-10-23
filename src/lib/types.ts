@@ -11,7 +11,7 @@ export interface User {
   name: string;
   username?: string; // <-- ADDED FOR SEARCH
   matric: string;
-  passwordHash: string;
+  passwordHash?: string;
   role: Role;
   studentPlan: StudentPlan;
   lecturerPlan: LecturerPlan;
