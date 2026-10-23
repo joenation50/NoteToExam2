@@ -4,21 +4,23 @@ import type { Question } from "./types";
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
 
 function apiKey() {
-  return (import.meta.env.VITE_GEMINI_API_KEY as string | undefined)?.trim() || "";
+  const key = (import.meta.env.VITE_GEMINI_API_KEY as string | undefined)?.trim();
+  if (!key) console.warn("🚨 VITE_GEMINI_API_KEY is missing from environment variables!");
+  return key || "";
 }
 
 // ────────────────────────────────────────────────────────────
-// CORE API CALL (Hardened with Retries & Timeouts)
+// CORE API CALL (Hardened)
 // ────────────────────────────────────────────────────────────
-async function callModel(prompt: string, temp = 0.5, retriesAllowed = 3): Promise<string> {
+async function callModel(prompt: string, temp = 0.5): Promise<string> {
   const key = apiKey();
   if (!key) throw new Error("offline-engine");
   
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 45000); // 45s timeout for 40 questions
+  const timeoutId = setTimeout(() => controller.abort(), 45000);
 
   try {
-    let retries = retriesAllowed;
+    let retries = 3;
     let res;
 
     while (retries > 0) {
@@ -46,7 +48,7 @@ async function callModel(prompt: string, temp = 0.5, retriesAllowed = 3): Promis
       if (res.ok) break;
 
       if (res.status === 503 || res.status === 429) {
-        await new Promise(r => setTimeout(r, 3000)); // Longer wait on rate limit
+        await new Promise(r => setTimeout(r, 2000));
         retries--;
       } else {
         const errData = await res.json().catch(() => ({}));
@@ -92,23 +94,12 @@ export async function generatePack(noteText: string, title: string): Promise<{
       4. If the document is normal academic notes, create questions directly from the concepts.
       5. NEVER use placeholder text like "Option A", "Option B". Create real, plausible distractors.
       6. Randomize the correct answer (A, B, C, or D). Do not always make it A.
-      7. If the OCR text is completely unreadable, you MUST return exactly: {"error": "Unreadable text"}
+      7. If the OCR text is completely unreadable, return exactly: {"error": "Unreadable text"}
 
       📚 THE 40 QUESTIONS BREAKDOWN:
       - 15 MCQ Questions (Multiple Choice)
       - 15 Theory Questions (Written explanation)
       - 10 Tricky/Application Questions (Real-world application)
-
-      🛑 BAD EXAMPLE (DO NOT DO THIS):
-      Question: "What does 1.79 X Alaves vs Malaga mean?"
-      Options: ["Alaves", "Single", "System", "Multiple"]
-      (This is bad because it's just copy-pasting raw text).
-
-      ✅ GOOD EXAMPLE (DO THIS):
-      Question: "Based on the provided document, what statistical concept is represented by the notation '1.79 X'?"
-      Options: ["A. Decimal odds representing probability", "B. The final score of the match", "C. The number of players on the field", "D. The date of the match"]
-      Correct Answer: "A. Decimal odds representing probability"
-      Explanation: "The 'X' with a decimal number (1.79) in sports data represents the implied probability or decimal odds."
 
       Return ONLY a valid JSON object exactly like this structure:
       {
@@ -131,8 +122,8 @@ export async function generatePack(noteText: string, title: string): Promise<{
       }
 
       DOCUMENT TEXT TO ANALYZE:
-      ${noteText.slice(0, 20000)}`, // Increased to 20k to capture more context
-      0.25 // Lower temp for strict adherence to rules
+      ${noteText.slice(0, 20000)}`,
+      0.25 
     );
     
     let summary = localSummary;
@@ -175,7 +166,7 @@ export async function generatePack(noteText: string, title: string): Promise<{
 }
 
 // ────────────────────────────────────────────────────────────
-// 2. SMART TUTOR (Context Aware + Safety Filters)
+// 2. HYBRID NORMAL CHAT (Chats normally, but uses notes)
 // ────────────────────────────────────────────────────────────
 export async function tutorReply(opts: {
   notes: string;
@@ -186,26 +177,25 @@ export async function tutorReply(opts: {
   
   const style = opts.eli5
     ? "Explain like the student is 5 years old. Use simple analogies."
-    : "Be precise, exam-ready, and highly professional. Use Markdown formatting.";
+    : "Be highly intelligent, precise, and conversational.";
 
-  const systemPrompt = `You are NoteToExam AI, an academic tutor.
+  // We give the AI freedom to chat normally, but give it the notes as context.
+  const systemPrompt = `You are NoteToExam AI, a brilliant and friendly AI assistant. 
   
-  🚨 STRICT RULES 🚨
-  - You can ONLY answer questions about Education, Science, Arts, General Knowledge, and School Subjects.
-  - DO NOT write code, debug code, or answer programming questions.
-  - DO NOT answer NSFW, explicit, or inappropriate questions.
-  - ${style}
-  - If the answer is in the notes, cite it like this: [Evidence: Note p.X]. 
-  - If the answer is general knowledge, start with "[External Knowledge]".
+  ${style}
   
-  NOTES:
+  You are having a normal conversation with a student. You can answer ANY question they ask (e.g., general knowledge, coding, advice). Do not restrict your answers.
+  
+  HOWEVER, if their question is related to the uploaded notes below, you MUST use the notes to answer them and add this exact citation tag at the end of the sentence: [Evidence: Note p.X]. If they just say "Hi", reply normally without citations.
+  
+  NOTES (Use only if relevant to the question):
   ${opts.notes ? opts.notes.slice(0, 15000) : "No notes uploaded yet."}
   
   STUDENT QUESTION:
   ${opts.question}`;
 
   try {
-    const raw = await callModel(systemPrompt, 0.5);
+    const raw = await callModel(systemPrompt, 0.6);
     return decorate(raw, opts.notes);
   } catch (err) {
     console.error("AI Tutor Failed:", err);
@@ -213,6 +203,9 @@ export async function tutorReply(opts: {
   }
 }
 
+// ────────────────────────────────────────────────────────────
+// LOCAL FALLBACKS & DECORATORS
+// ────────────────────────────────────────────────────────────
 function localTutor(opts: { notes: string; question: string; eli5: boolean; }) {
   const qWords = opts.question.toLowerCase().split(/\W+/).filter((w) => w.length > 3);
   const blocks = opts.notes.split(/\[Page\s+(\d+)\]/i);
@@ -227,27 +220,26 @@ function localTutor(opts: { notes: string; question: string; eli5: boolean; }) {
     }
   }
   const snippet = best.text.replace(/\s+/g, " ").trim().slice(0, 420);
-  if (!snippet || best.score === 0) return `${opts.eli5 ? "I no see this one." : "Not in notes."} [External Knowledge] I cannot find this in your uploaded note. Please check your internet connection for the full AI.`;
-  return opts.eli5 ? `Abeg, look am like this [Evidence: Note p.${best.page}]: ${snippet}` : `From your notes [Evidence: Note p.${best.page}]: ${snippet}`;
+  if (!snippet || best.score === 0) return `${opts.eli5 ? "I no see this one." : "Not in notes."} I cannot find this in your uploaded note. Please check your internet connection for the full AI.`;
+  return `From your notes [Evidence: Note p.${best.page}]: ${snippet}`;
 }
 
 function decorate(text: string, notes: string) {
   const citations: { page: number | null; external: boolean }[] = [];
   const pageHits = [...text.matchAll(/(?:Evidence:\s*Note\s*)?p(?:age)?\.?\s*(\d+)/gi)];
   for (const m of pageHits) citations.push({ page: Number(m[1]), external: false });
-  const external = /\[External Knowledge\]/i.test(text);
-  if (external) citations.push({ page: null, external: true });
-  if (!citations.length) {
+  
+  // If no citations exist but we asked a question, maybe it's external
+  if (!citations.length && notes) {
     const has = /\[Page\s+\d+\]/i.test(notes);
-    citations.push({ page: has ? 1 : null, external: !has });
+    if (!has) citations.push({ page: null, external: true });
   }
   return { text, citations };
 }
 
 // ────────────────────────────────────────────────────────────
-// 3. VOICE ENGINE (Bulletproof)
+// VOICE ENGINE
 // ────────────────────────────────────────────────────────────
-
 let activeRecognition: any = null;
 let isCurrentlySpeaking = false;
 
@@ -259,7 +251,7 @@ export function speak(text: string): Promise<void> {
     isCurrentlySpeaking = true;
     
     const cleanText = text
-      .replace(/\[External Knowledge\]/gi, "Outside the notes.")
+      .replace(/\[External Knowledge\]/gi, "")
       .replace(/\[Evidence:.*?\]/gi, "")
       .replace(/[*_#`]/g, "")
       .replace(/\n+/g, ". ");
@@ -270,26 +262,14 @@ export function speak(text: string): Promise<void> {
     }
 
     const utterance = new SpeechSynthesisUtterance(cleanText);
-    
     const voices = window.speechSynthesis.getVoices();
-    const preferredVoice = voices.find(v => v.lang.includes("en-NG")) || 
-                           voices.find(v => v.lang.includes("en-GB")) || 
-                           voices.find(v => v.name.includes("Google UK English Female")) ||
-                           voices[0];
+    const preferredVoice = voices.find(v => v.lang.includes("en-NG")) || voices.find(v => v.lang.includes("en-GB")) || voices[0];
                            
     if (preferredVoice) utterance.voice = preferredVoice;
-    
     utterance.rate = 1.05;
-    utterance.pitch = 1.0;
     
-    utterance.onend = () => {
-      isCurrentlySpeaking = false;
-      resolve();
-    };
-    utterance.onerror = () => {
-      isCurrentlySpeaking = false;
-      resolve();
-    };
+    utterance.onend = () => { isCurrentlySpeaking = false; resolve(); };
+    utterance.onerror = () => { isCurrentlySpeaking = false; resolve(); };
     
     window.speechSynthesis.speak(utterance);
   });
@@ -306,10 +286,8 @@ export function listen(): Promise<string> {
 
     const rec = new SR();
     activeRecognition = rec;
-    
     rec.lang = "en-NG";
     rec.interimResults = true; 
-    rec.maxAlternatives = 1;
     
     if (isCurrentlySpeaking) {
       window.speechSynthesis.cancel();
@@ -319,9 +297,7 @@ export function listen(): Promise<string> {
     rec.onresult = (e: any) => {
       let finalTranscript = '';
       for (let i = e.resultIndex; i < e.results.length; ++i) {
-        if (e.results[i].isFinal) {
-          finalTranscript += e.results[i][0].transcript;
-        }
+        if (e.results[i].isFinal) finalTranscript += e.results[i][0].transcript;
       }
       if (finalTranscript) {
         resolve(finalTranscript);
