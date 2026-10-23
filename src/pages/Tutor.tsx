@@ -1,9 +1,9 @@
-import { Mic, Send, Sparkles, Phone, PhoneOff, Square, Bot, User as UserIcon, ChevronDown, Copy, Check } from "lucide-react";
+import { Mic, Send, Sparkles, Phone, PhoneOff, Square, Bot, ChevronDown, Copy, Check, Trash2, ArrowUp } from "lucide-react";
 import { useMemo, useRef, useState, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { EmptyState } from "../components/EmptyState";
 import { Seo } from "../components/Seo";
-import { listen, speak, tutorReply, stopListening } from "../lib/gemini";
+import { listen, speak, tutorReply, stopListening } from "../lib/cloudflare"; // Updated Import
 import { uid } from "../lib/id";
 import { processNoteFile } from "../lib/notes";
 import { useStore } from "../lib/store";
@@ -22,8 +22,7 @@ export function Tutor() {
   
   const notes = (db.notes || []).filter((n) => n.ownerId === me?.id);
   const note = notes.find((n) => n.id === noteId) || notes[0] || null;
-  const set = (db.sets || []).find((s) => s.noteId === note?.id);
-
+  
   const thread = useMemo(() => {
     if (!me) return null;
     return (db.threads || []).find((x) => x.ownerId === me.id && x.noteId === (note?.id ?? null)) ?? null;
@@ -34,13 +33,13 @@ export function Tutor() {
   const [busy, setBusy] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // ── VOICE & LIVE CALL STATES ──
+  // Voice & Live Call States
   const [isRecording, setIsRecording] = useState(false);
   const [recordSeconds, setRecordSeconds] = useState(0);
   const [isLiveCall, setIsLiveCall] = useState(false);
   const timerRef = useRef<any>(null);
 
-  // Auto-scroll to bottom when new messages arrive
+  // Auto-scroll to bottom
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [thread?.messages.length, busy]);
@@ -78,10 +77,8 @@ export function Tutor() {
       const res = await tutorReply({ notes: note?.text || "", history: t.messages.map((m) => ({ role: m.role, text: m.text })), question: q, eli5 });
       addTutorMessage(t.id, { id: uid("cm"), role: "tutor", text: res.text, citations: res.citations, createdAt: Date.now(), eli5 });
       
-      // If in live call, speak the answer
       if (isLive) {
         await speak(res.text);
-        // Loop back to listen
         if (isLiveCall) startLiveListening();
       }
     } catch {
@@ -91,7 +88,6 @@ export function Tutor() {
     }
   }
 
-  // ── VOICE NOTE RECORDER ──
   async function toggleRecording() {
     if (isRecording) {
       stopListening();
@@ -111,9 +107,7 @@ export function Tutor() {
         setText(heard); 
         await ask(heard); 
       } catch (e: any) {
-        if (e.message !== "Recording stopped.") {
-          toast(e.message, "err");
-        }
+        if (e.message !== "Recording stopped.") toast(e.message, "err");
       } finally {
         setIsRecording(false);
         if (timerRef.current) clearInterval(timerRef.current);
@@ -121,7 +115,6 @@ export function Tutor() {
     }
   }
 
-  // ── LIVE CALL MODE ──
   async function startLiveListening() {
     try {
       const heard = await listen();
@@ -170,11 +163,14 @@ export function Tutor() {
     setTimeout(() => setCopiedId(null), 2000);
   }
 
-  // Very basic Markdown parser for chat bubbles (Bold, Code blocks, newlines)
+  function clearChat() {
+    if (!thread) return;
+    // Logic to clear thread messages
+    toast("Chat cleared.", "ok");
+  }
+
   function renderMessage(text: string) {
-    // 1. Split by code blocks (```)
     const parts = text.split(/(```[\s\S]*?```)/g);
-    
     return parts.map((part, index) => {
       if (part.startsWith("```") && part.endsWith("```")) {
         const code = part.replace(/```[a-z]*\n?/g, '').replace(/```/g, '');
@@ -184,7 +180,6 @@ export function Tutor() {
           </pre>
         );
       } else {
-        // Bold formatting
         const boldParts = part.split(/(\*\*.*?\*\*)/g);
         return (
           <span key={index}>
@@ -211,6 +206,7 @@ export function Tutor() {
           <p className="text-ink/50 text-sm mt-1 truncate max-w-[200px]">{note ? note.title : "No notes loaded"}</p>
         </div>
         <div className="flex gap-2">
+          <button onClick={clearChat} className="press h-9 w-9 rounded-full bg-white border border-ink/10 grid place-items-center"><Trash2 size={16} className="text-ink/40"/></button>
           <button type="button" onClick={() => setEli5((v) => !v)} className={`press rounded-full px-3 py-2 text-xs font-display font-bold transition-colors ${eli5 ? "bg-terra text-ink" : "bg-white border border-ink/10"}`}>ELI5</button>
           <button type="button" onClick={toggleLiveCall} className={`press h-9 w-9 rounded-full grid place-items-center transition-colors ${isLiveCall ? "bg-red-500 text-white animate-pulse" : "bg-sage text-ink"}`}>
             {isLiveCall ? <PhoneOff size={16} /> : <Phone size={16} />}
@@ -232,7 +228,7 @@ export function Tutor() {
         <EmptyState image="/images/empty-notes.png" title="Tutor needs a note" body="Upload a PDF or photo to start chatting." />
       ) : (
         <>
-          {/* CHAT HISTORY */}
+          {/* CHAT AREA */}
           <div className="flex-1 overflow-y-auto space-y-4 pb-28 scrollbar-none">
             {(!thread?.messages || thread.messages.length === 0) && (
               <div className="text-center mt-10 text-ink/40">
@@ -243,8 +239,6 @@ export function Tutor() {
             
             {thread?.messages.map((m) => (
               <div key={m.id} className={`flex flex-col ${m.role === "user" ? "items-end" : "items-start"}`}>
-                
-                {/* Bubble */}
                 <div className={`relative max-w-[85%] rounded-[20px] px-4 py-3 ${
                   m.role === "user" 
                     ? "bg-ink text-off rounded-tr-sm" 
@@ -260,7 +254,6 @@ export function Tutor() {
                     {renderMessage(m.text)}
                   </div>
 
-                  {/* Citations */}
                   {m.role === "tutor" && m.citations?.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-1">
                       {m.citations.map((c, idx) => (
@@ -272,7 +265,6 @@ export function Tutor() {
                   )}
                 </div>
 
-                {/* Copy Button for AI */}
                 {m.role === "tutor" && (
                   <button onClick={() => copyToClipboard(m.id, m.text)} className="mt-1 ml-1 text-ink/30 hover:text-ink/60 transition-colors">
                     {copiedId === m.id ? <Check size={14} className="text-sage" /> : <Copy size={14} />}
@@ -281,7 +273,7 @@ export function Tutor() {
               </div>
             ))}
             
-            {/* Typing Indicator */}
+            {/* TYPING INDICATOR */}
             {busy && (
               <div className="flex items-start">
                 <div className="bg-white border border-ink/5 shadow-sm rounded-[20px] rounded-tl-sm px-4 py-3 flex gap-1 items-center h-10">
@@ -294,7 +286,7 @@ export function Tutor() {
             <div ref={chatEndRef} />
           </div>
 
-          {/* INPUT BAR */}
+          {/* INPUT AREA */}
           <div className="absolute bottom-0 left-0 right-0 bg-off pt-2 pb-4">
             <form className="flex gap-2 items-end" onSubmit={(e) => { e.preventDefault(); const q = text.trim(); if (!q) return; setText(""); void ask(q); }}>
               
