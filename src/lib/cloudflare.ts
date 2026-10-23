@@ -43,7 +43,6 @@ export async function tutorReply(opts: {
   
   const style = opts.eli5 ? "Explain it super simply like I'm 5 years old." : "Be sharp, smart, and helpful. Use Markdown formatting.";
 
-  // The AI is told to act normal, but it CAN use the notes if they are relevant.
   const prompt = `You are a brilliant AI assistant. ${style}
   
   You can answer ANY question the user asks, whether it's coding, general knowledge, or life advice. 
@@ -56,7 +55,7 @@ export async function tutorReply(opts: {
 
   try {
     const raw = await callModel(prompt, 0.7);
-    return { text: raw, citations: [] }; // No more forced citations
+    return { text: raw, citations: [] };
   } catch (err) {
     console.error("Tutor Failed:", err);
     return { text: "⚠️ AI is currently offline. Please check your internet connection.", citations: [] };
@@ -140,6 +139,19 @@ export async function generatePack(noteText: string, title: string): Promise<{
     }
     throw new Error(err.message || "Please upload a clearer image or PDF.");
   }
+}
+
+// ────────────────────────────────────────────────────────────
+// 3. AI INSIGHTS GENERATOR (For Analytics Page) - RESTORED
+// ────────────────────────────────────────────────────────────
+export async function generateInsight(statsString: string): Promise<string> {
+  const prompt = `You are an elite academic advisor. A student has these CBT scores: ${statsString}. 
+  
+  Write a short, encouraging 3-sentence analysis of their performance. 
+  Tell them exactly which 2 subjects they need to focus on based on the lowest scores, and give them one specific, actionable study tip. 
+  Do not use markdown. Keep it under 80 words. Be direct and professional.`;
+
+  return await callModel(prompt, 0.7);
 }
 
 // ────────────────────────────────────────────────────────────
