@@ -12,6 +12,7 @@ export function Auth() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
+  const [username, setUsername] = useState(""); // NEW: Username state
   const [matric, setMatric] = useState("");
   const [school, setSchool] = useState("");
   const [role, setRole] = useState<Role>("student");
@@ -37,7 +38,22 @@ export function Auth() {
         if (role === "lecturer" && !lecturerVerify.trim() && !idFileName) {
           throw new Error("Add an institutional ID or a verification link.");
         }
-        await signup({ email, password, name, matric, role, school, learningStage: stage, lecturerVerify: role === "lecturer" ? lecturerVerify.trim() || idFileName : "", referredBy: new URLSearchParams(window.location.search).get("ref") || localStorage.getItem("nte_ref") });
+        
+        // Clean the username (lowercase, no spaces)
+        const cleanUsername = username.toLowerCase().replace(/\s+/g, '');
+
+        await signup({ 
+          email, 
+          password, 
+          name, 
+          username: cleanUsername, // NEW: Pass to signup
+          matric, 
+          role, 
+          school, 
+          learningStage: stage, 
+          lecturerVerify: role === "lecturer" ? lecturerVerify.trim() || idFileName : "", 
+          referredBy: new URLSearchParams(window.location.search).get("ref") || localStorage.getItem("nte_ref") 
+        });
       }
       toast(mode === "in" ? "Welcome back." : "Account ready. Let’s study.", "ok");
       nav("/app");
@@ -55,7 +71,7 @@ export function Auth() {
       toast("Redirecting...", "ok");
     } catch (err) {
       toast(err instanceof Error ? err.message : "Google sign-in failed.", "err");
-      setGoogleBusy(false); // Reset button if it fails
+      setGoogleBusy(false); 
     }
   }
 
@@ -116,6 +132,16 @@ export function Auth() {
             {mode === "up" && (
               <>
                 <Field label="Full name" value={name} onChange={setName} required />
+                
+                {/* NEW USERNAME FIELD */}
+                <Field 
+                  label="Username" 
+                  value={username} 
+                  onChange={(v) => setUsername(v.toLowerCase().replace(/\s+/g, ''))} 
+                  required 
+                  placeholder="e.g. johndoe98" 
+                />
+                
                 <Field label="Matric number" value={matric} onChange={setMatric} placeholder="Optional" />
                 <Field label="School" value={school} onChange={setSchool} placeholder="Campus name" />
                 <label className="block">
