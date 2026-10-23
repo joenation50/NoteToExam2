@@ -9,6 +9,7 @@ export interface User {
   id: string;
   email: string;
   name: string;
+  username?: string; // <-- ADDED FOR SEARCH
   matric: string;
   passwordHash: string;
   role: Role;
