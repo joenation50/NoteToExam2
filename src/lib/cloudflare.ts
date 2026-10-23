@@ -2,23 +2,49 @@ import { parseModelQuestions, summarizeLocally } from "./questions";
 import type { Question } from "./types";
 
 // ────────────────────────────────────────────────────────────
-// CORE API CALL (Via Secure Backend Proxy)
+// CORE API CALL
 // ────────────────────────────────────────────────────────────
+const getEndpoint = (accountId: string) => `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1/chat/completions`;
+
+// UPDATED: Using the newest, most stable Cloudflare model
+const MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+
 async function callModel(prompt: string, temp = 0.7): Promise<string> {
+  const accountId = (import.meta.env.VITE_CLOUDFLARE_ACCOUNT_ID as string | undefined)?.trim();
+  const apiToken = (import.meta.env.VITE_CLOUDFLARE_API_TOKEN as string | undefined)?.trim();
+  
+  if (!accountId || !apiToken) {
+    alert("⚠️ MISSING CREDENTIALS: Check Cloudflare Pages Environment Variables.");
+    throw new Error("offline-engine");
+  }
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 45000);
 
   try {
-    const res = await fetch("/api/ai", {
+    const res = await fetch(getEndpoint(accountId), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt }),
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiToken}`,
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [{ role: "user", content: prompt }],
+        temperature: temp,
+        max_tokens: 4096,
+      }),
       signal: controller.signal,
     });
 
     clearTimeout(timeoutId);
 
-    if (!res.ok) throw new Error("tutor-unavailable");
+    if (!res.ok) {
+      const errorText = await res.text();
+      // THIS WILL SHOW THE EXACT CLOUDFLARE ERROR ON YOUR SCREEN
+      alert(`🚨 CLOUDFLARE API ERROR (${res.status}):\n${errorText}`);
+      throw new Error("tutor-unavailable");
+    }
 
     const json = await res.json();
     const text = json.result?.response || json.choices?.[0]?.message?.content || "";
@@ -27,12 +53,20 @@ async function callModel(prompt: string, temp = 0.7): Promise<string> {
     return text;
   } catch (err: any) {
     clearTimeout(timeoutId);
+    
+    // If it's a network error, show it
+    if (err.name === 'AbortError') {
+        alert("🚨 REQUEST TIMED OUT: Cloudflare took too long to reply.");
+    } else if (err.message === "Failed to fetch") {
+        alert("🚨 NETWORK ERROR: Failed to fetch. This is usually a CORS issue or your API token is invalid.");
+    }
+    
     throw err;
   }
 }
 
 // ────────────────────────────────────────────────────────────
-// 1. NORMAL CHAT TUTOR (Hybrid: Normal Chat + Optional Notes)
+// 1. CHAT TUTOR
 // ────────────────────────────────────────────────────────────
 export async function tutorReply(opts: {
   notes: string;
@@ -142,7 +176,7 @@ export async function generatePack(noteText: string, title: string): Promise<{
 }
 
 // ────────────────────────────────────────────────────────────
-// 3. AI INSIGHTS GENERATOR (For Analytics Page) - RESTORED
+// 3. AI INSIGHTS (For Analytics)
 // ────────────────────────────────────────────────────────────
 export async function generateInsight(statsString: string): Promise<string> {
   const prompt = `You are an elite academic advisor. A student has these CBT scores: ${statsString}. 
