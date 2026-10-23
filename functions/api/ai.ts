@@ -4,42 +4,20 @@ export async function onRequestPost(context: any) {
   try {
     const { prompt } = await request.json();
 
-    // These are pulled securely from Cloudflare, NOT the browser!
-    const accountId = env.VITE_CLOUDFLARE_ACCOUNT_ID || env.CLOUDFLARE_ACCOUNT_ID;
-    const apiToken = env.VITE_CLOUDFLARE_API_TOKEN || env.CLOUDFLARE_API_TOKEN;
+    // This uses Cloudflare's built-in AI binding (no API key needed!)
+    const response = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.7,
+      max_tokens: 2048,
+    });
 
-    if (!accountId || !apiToken) {
-      return new Response(JSON.stringify({ error: "Missing Cloudflare credentials in environment variables." }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    const response = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1/chat/completions`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiToken}`,
-        },
-        body: JSON.stringify({
-          model: "@cf/meta/llama-3.1-8b-instruct",
-          messages: [{ role: "user", content: prompt }],
-          temperature: 0.5,
-          max_tokens: 4096,
-        }),
-      }
-    );
-
-    const data = await response.json();
-    
-    // Pass the AI response back to the frontend
-    return new Response(JSON.stringify(data), {
+    // Return the response in the format your frontend expects
+    return new Response(JSON.stringify({ result: { response: response.response } }), {
       headers: { "Content-Type": "application/json" },
     });
 
   } catch (error: any) {
+    console.error("AI Error:", error);
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
