@@ -1,10 +1,10 @@
 import { parseModelQuestions, summarizeLocally } from "./questions";
 import type { Question } from "./types";
 
-// Cloudflare Workers AI Endpoint
+// ────────────────────────────────────────────────────────────
+// CORE CONFIGURATION & SAFETY
+// ────────────────────────────────────────────────────────────
 const getEndpoint = (accountId: string) => `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1/chat/completions`;
-
-// The Model (Llama 3 8B is free and very fast)
 const MODEL = "@cf/meta/llama-3.1-8b-instruct";
 
 function getCredentials() {
@@ -12,45 +12,56 @@ function getCredentials() {
   const apiToken = (import.meta.env.VITE_CLOUDFLARE_API_TOKEN as string | undefined)?.trim();
   
   if (!accountId || !apiToken) {
-    console.warn("🚨 Cloudflare credentials missing. Check environment variables.");
+    console.warn("🚨 Cloudflare credentials missing. Check VITE_CLOUDFLARE_ACCOUNT_ID and VITE_CLOUDFLARE_API_TOKEN.");
     return null;
   }
   return { accountId, apiToken };
 }
 
 // ────────────────────────────────────────────────────────────
-// CORE API CALL (Cloudflare Workers AI)
+// HARDENED API CALL
 // ────────────────────────────────────────────────────────────
-async function callModel(prompt: string, temp = 0.5): Promise<string> {
+async function callModel(prompt: string, temp = 0.5, retriesAllowed = 3): Promise<string> {
   const creds = getCredentials();
   if (!creds) throw new Error("offline-engine");
   
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 45000);
+  const timeoutId = setTimeout(() => controller.abort(), 45000); // 45s timeout for large generation
 
   try {
-    const res = await fetch(getEndpoint(creds.accountId), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${creds.apiToken}`,
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [{ role: "user", content: prompt }],
-        temperature: temp,
-        max_tokens: 4096,
-      }),
-      signal: controller.signal,
-    });
+    let retries = retriesAllowed;
+    let res;
+
+    while (retries > 0) {
+      res = await fetch(getEndpoint(creds.accountId), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${creds.apiToken}`,
+        },
+        body: JSON.stringify({
+          model: MODEL,
+          messages: [{ role: "user", content: prompt }],
+          temperature: temp,
+          max_tokens: 4096,
+        }),
+        signal: controller.signal,
+      });
+
+      if (res.ok) break;
+
+      if (res.status === 503 || res.status === 429) {
+        await new Promise(r => setTimeout(r, 2500)); // Wait before retry
+        retries--;
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        console.error("Cloudflare AI Error:", errData);
+        throw new Error("tutor-unavailable");
+      }
+    }
 
     clearTimeout(timeoutId);
-    
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      console.error("Cloudflare AI Error:", errData);
-      throw new Error("tutor-unavailable");
-    }
+    if (!res || !res.ok) throw new Error("tutor-unavailable");
 
     const json = await res.json();
     const text = json.choices?.[0]?.message?.content || "";
@@ -64,7 +75,7 @@ async function callModel(prompt: string, temp = 0.5): Promise<string> {
 }
 
 // ────────────────────────────────────────────────────────────
-// 1. 40-QUESTION GENERATOR
+// 1. ULTIMATE 40-QUESTION GENERATOR
 // ────────────────────────────────────────────────────────────
 export async function generatePack(noteText: string, title: string): Promise<{
   summary: string;
@@ -75,33 +86,36 @@ export async function generatePack(noteText: string, title: string): Promise<{
   
   try {
     const raw = await callModel(
-      `You are an elite university examiner. Analyze the following document text and create a 40-question test.
+      `You are an elite university examiner. Analyze the following document text and create a 40-question professional test.
       
-      RULES:
-      1. NEVER copy raw text into the questions. Rewrite the concepts.
+      🚨 ABSOLUTE RULES 🚨
+      1. NEVER copy raw text into the questions. Rewrite the concepts into actual exam questions.
       2. NEVER put the answer inside the question text.
-      3. Randomize correct answers (A, B, C, D).
-      4. If the text is Sports Betting data, create questions about Statistics or Math.
+      3. If the document is Sports Betting data, create questions about Statistics, Probability, or Math.
+      4. Randomize correct answers (A, B, C, D). Do not always make it A.
       5. If unreadable, return exactly: {"error": "Unreadable text"}
 
-      BREAKDOWN: 15 MCQ, 15 Theory, 10 Application.
-      
-      Return ONLY a raw JSON object:
+      📚 BREAKDOWN:
+      - 15 MCQ Questions (Multiple Choice)
+      - 15 Theory Questions (Written explanation)
+      - 10 Tricky/Application Questions
+
+      Return ONLY a raw JSON object exactly like this structure (no markdown formatting):
       {
-        "summary": "Brief summary.",
+        "summary": "A brief 2-sentence summary.",
         "questions": [
           {
             "type": "mcq",
-            "question": "...",
-            "options": ["A", "B", "C", "D"],
-            "answer": "...",
-            "explanation": "..."
+            "question": "The question text here...",
+            "options": ["Option A", "Option B", "Option C", "Option D"],
+            "answer": "The exact text of the correct option",
+            "explanation": "Why this is correct."
           },
           {
             "type": "theory",
-            "question": "...",
-            "answer": "...",
-            "explanation": "..."
+            "question": "The theory question here...",
+            "answer": "The ideal answer...",
+            "explanation": "Key points the examiner is looking for."
           }
         ]
       }
@@ -146,12 +160,12 @@ export async function generatePack(noteText: string, title: string): Promise<{
         engine: "local",
       };
     }
-    throw new Error(err.message || "Please upload a clearer image.");
+    throw new Error(err.message || "Please upload a clearer image or PDF.");
   }
 }
 
 // ────────────────────────────────────────────────────────────
-// 2. NORMAL CHAT TUTOR (Hybrid)
+// 2. HYBRID CHAT TUTOR (Normal Chat + Note Context)
 // ────────────────────────────────────────────────────────────
 export async function tutorReply(opts: {
   notes: string;
@@ -181,6 +195,22 @@ export async function tutorReply(opts: {
   }
 }
 
+// ────────────────────────────────────────────────────────────
+// 3. AI INSIGHTS GENERATOR (For Analytics Page)
+// ────────────────────────────────────────────────────────────
+export async function generateInsight(statsString: string): Promise<string> {
+  const prompt = `You are an elite academic advisor. A student has these CBT scores: ${statsString}. 
+  
+  Write a short, encouraging 3-sentence analysis of their performance. 
+  Tell them exactly which 2 subjects they need to focus on based on the lowest scores, and give them one specific, actionable study tip. 
+  Do not use markdown. Keep it under 80 words. Be direct and professional.`;
+
+  return await callModel(prompt, 0.7);
+}
+
+// ────────────────────────────────────────────────────────────
+// FALLBACK & DECORATOR HELPERS
+// ────────────────────────────────────────────────────────────
 function localTutor(opts: { notes: string; question: string; eli5: boolean; }) {
   const qWords = opts.question.toLowerCase().split(/\W+/).filter((w) => w.length > 3);
   const blocks = opts.notes.split(/\[Page\s+(\d+)\]/i);
@@ -215,7 +245,7 @@ function decorate(text: string, notes: string) {
 }
 
 // ────────────────────────────────────────────────────────────
-// 3. VOICE ENGINE
+// VOICE ENGINE (Bulletproof)
 // ────────────────────────────────────────────────────────────
 let activeRecognition: any = null;
 let isCurrentlySpeaking = false;
