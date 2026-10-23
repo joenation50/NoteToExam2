@@ -6,12 +6,13 @@ import { StoreProvider } from "./lib/store";
 import { Admin } from "./pages/Admin";
 import { Auth } from "./pages/Auth";
 import { Cbt } from "./pages/Cbt";
-import { CBTSetup } from "./pages/CBTSetup"; // FIX: Changed casing to match your file
+import { CBTSetup } from "./pages/CBTSetup"; 
 import { Dashboard } from "./pages/Dashboard";
 import { Downloads } from "./pages/Downloads";
 import { Groups } from "./pages/Groups";
 import { Landing } from "./pages/Landing";
 import { Leaderboard } from "./pages/Leaderboard";
+import { Insights } from "./pages/Insights"; // <-- ADDED IMPORT
 
 import { Library } from "./pages/Library";
 import { Marketplace } from "./pages/Marketplace";
@@ -40,11 +41,12 @@ export default function App() {
             }
           >
             <Route index element={<Dashboard />} />
+            <Route path="insights" element={<Insights />} /> {/* <-- ADDED ROUTE */}
             <Route path="tutor" element={<Tutor />} />
             <Route path="market" element={<Marketplace />} />
             <Route path="library" element={<Library />} />
             <Route path="library/:id" element={<Pack />} />
-            <Route path="cbt/setup" element={<CBTSetup />} /> {/* FIX: Changed casing here too */}
+            <Route path="cbt/setup" element={<CBTSetup />} />
             <Route path="cbt/:id" element={<Cbt />} />
             <Route path="profile" element={<Profile />} />
             <Route path="messages" element={<Messages />} />
