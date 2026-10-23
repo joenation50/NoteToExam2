@@ -1,13 +1,12 @@
-import { Mic, Send, Sparkles, Phone, PhoneOff, Square, Bot, ChevronDown, Copy, Check, Trash2, ArrowUp } from "lucide-react";
+import { Mic, Send, Sparkles, Phone, PhoneOff, Square, Bot, ChevronDown, Copy, Check, Plus } from "lucide-react";
 import { useMemo, useRef, useState, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { EmptyState } from "../components/EmptyState";
 import { Seo } from "../components/Seo";
-import { listen, speak, tutorReply, stopListening } from "../lib/cloudflare"; // Updated Import
+import { listen, speak, tutorReply, stopListening } from "../lib/cloudflare";
 import { uid } from "../lib/id";
 import { processNoteFile } from "../lib/notes";
 import { useStore } from "../lib/store";
-import { motion, AnimatePresence } from "framer-motion";
 
 export function Tutor() {
   const { me, db, upsertThread, addTutorMessage, toast, canGenerate, addCredits, recordGeneration, refundCredits, uploadNote, saveSet, touchStreak } = useStore();
@@ -18,15 +17,23 @@ export function Tutor() {
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState("");
   const [params] = useSearchParams();
-  const noteId = params.get("note");
   
+  // If no noteId is provided in URL, we use the first note, or null
+  const noteId = params.get("note");
   const notes = (db.notes || []).filter((n) => n.ownerId === me?.id);
   const note = notes.find((n) => n.id === noteId) || notes[0] || null;
+
+  // Thread state
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   
+  // Find the active thread based on state or existing note
   const thread = useMemo(() => {
     if (!me) return null;
-    return (db.threads || []).find((x) => x.ownerId === me.id && x.noteId === (note?.id ?? null)) ?? null;
-  }, [me, note?.id, db.threads]);
+    if (activeThreadId) return (db.threads || []).find((x) => x.id === activeThreadId);
+    // If no active thread selected, find the latest one for this note
+    const threadsForNote = (db.threads || []).filter((x) => x.ownerId === me.id && x.noteId === (note?.id ?? null));
+    return threadsForNote.sort((a, b) => b.updatedAt - a.updatedAt)[0] || null;
+  }, [me, note?.id, db.threads, activeThreadId]);
 
   const [text, setText] = useState("");
   const [eli5, setEli5] = useState(false);
@@ -39,12 +46,10 @@ export function Tutor() {
   const [isLiveCall, setIsLiveCall] = useState(false);
   const timerRef = useRef<any>(null);
 
-  // Auto-scroll to bottom
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [thread?.messages.length, busy]);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -53,21 +58,30 @@ export function Tutor() {
     };
   }, []);
 
+  // ── START NEW CHAT ──
+  function startNewChat() {
+    const newId = uid("th");
+    const newThread = { 
+      id: newId, 
+      ownerId: me!.id, 
+      noteId: note?.id ?? null, 
+      title: "New Conversation", 
+      messages: [], 
+      updatedAt: Date.now() 
+    };
+    upsertThread(newThread);
+    setActiveThreadId(newId);
+  }
+
   async function ask(q: string, isLive = false) {
     if (!me) return;
-    if (me.chatCap >= 0 && me.chatsUsed >= me.chatCap) {
-      if (!isLive) toast("AI chat cap reached.", "err");
-      return;
-    }
-    if (db.flags.pauseAi) {
-      if (!isLive) toast("Tutor is paused.", "err");
-      return;
-    }
     
     let t = thread;
+    // If no thread exists, create one automatically
     if (!t) {
-      t = { id: uid("th"), ownerId: me.id, noteId: note?.id ?? null, title: note?.title || "General", messages: [], updatedAt: Date.now() };
+      t = { id: uid("th"), ownerId: me.id, noteId: note?.id ?? null, title: "New Conversation", messages: [], updatedAt: Date.now() };
       upsertThread(t);
+      setActiveThreadId(t.id);
     }
     
     addTutorMessage(t.id, { id: uid("cm"), role: "user", text: q, citations: [], createdAt: Date.now(), eli5 });
@@ -149,6 +163,7 @@ export function Tutor() {
       if (!result || !result.note || !result.set) throw new Error("The AI failed to read this file.");
       toast("Note ready.", "ok");
       nav(`/app/tutor?note=${result.note.id}`);
+      setActiveThreadId(null); // Reset thread for the new note
     } catch (err) {
       toast(err instanceof Error ? err.message : "Could not read file.", "err");
     } finally {
@@ -161,12 +176,6 @@ export function Tutor() {
     navigator.clipboard.writeText(text);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
-  }
-
-  function clearChat() {
-    if (!thread) return;
-    // Logic to clear thread messages
-    toast("Chat cleared.", "ok");
   }
 
   function renderMessage(text: string) {
@@ -203,11 +212,14 @@ export function Tutor() {
       <div className="flex items-start justify-between gap-3 shrink-0 mb-2">
         <div>
           <h1 className="font-display text-3xl font-bold">AI Tutor</h1>
-          <p className="text-ink/50 text-sm mt-1 truncate max-w-[200px]">{note ? note.title : "No notes loaded"}</p>
+          <p className="text-ink/50 text-sm mt-1 truncate max-w-[200px]">{note ? note.title : "General Chat"}</p>
         </div>
         <div className="flex gap-2">
-          <button onClick={clearChat} className="press h-9 w-9 rounded-full bg-white border border-ink/10 grid place-items-center"><Trash2 size={16} className="text-ink/40"/></button>
-          <button type="button" onClick={() => setEli5((v) => !v)} className={`press rounded-full px-3 py-2 text-xs font-display font-bold transition-colors ${eli5 ? "bg-terra text-ink" : "bg-white border border-ink/10"}`}>ELI5</button>
+          {/* NEW CHAT BUTTON */}
+          <button onClick={startNewChat} className="press h-9 px-3 rounded-full bg-terra text-ink flex items-center gap-1 text-xs font-bold shadow-sm">
+            <Plus size={14} /> New
+          </button>
+          <button type="button" onClick={() => setEli5((v) => !v)} className={`press rounded-full px-3 py-2 text-xs font-display font-bold transition-colors ${eli5 ? "bg-ink text-off" : "bg-white border border-ink/10"}`}>ELI5</button>
           <button type="button" onClick={toggleLiveCall} className={`press h-9 w-9 rounded-full grid place-items-center transition-colors ${isLiveCall ? "bg-red-500 text-white animate-pulse" : "bg-sage text-ink"}`}>
             {isLiveCall ? <PhoneOff size={16} /> : <Phone size={16} />}
           </button>
@@ -224,112 +236,92 @@ export function Tutor() {
         <div className="h-8 w-8 bg-ink/5 rounded-full grid place-items-center"><ChevronDown size={16} className="text-ink/40"/></div>
       </button>
 
-      {!note ? (
-        <EmptyState image="/images/empty-notes.png" title="Tutor needs a note" body="Upload a PDF or photo to start chatting." />
-      ) : (
-        <>
-          {/* CHAT AREA */}
-          <div className="flex-1 overflow-y-auto space-y-4 pb-28 scrollbar-none">
-            {(!thread?.messages || thread.messages.length === 0) && (
-              <div className="text-center mt-10 text-ink/40">
-                <Sparkles size={32} className="mx-auto mb-2 opacity-50" />
-                <p className="text-sm">Ask me anything about <b>{note.title}</b>.<br/>I remember our past chats!</p>
-              </div>
-            )}
-            
-            {thread?.messages.map((m) => (
-              <div key={m.id} className={`flex flex-col ${m.role === "user" ? "items-end" : "items-start"}`}>
-                <div className={`relative max-w-[85%] rounded-[20px] px-4 py-3 ${
-                  m.role === "user" 
-                    ? "bg-ink text-off rounded-tr-sm" 
-                    : "bg-white text-ink border border-ink/5 shadow-sm rounded-tl-sm"
-                }`}>
-                  {m.role === "tutor" && (
-                    <div className="flex items-center gap-1.5 mb-1 text-[10px] font-bold uppercase tracking-widest text-sage-deep">
-                      <Bot size={12} /> AI Tutor
-                    </div>
-                  )}
-                  
-                  <div className="whitespace-pre-wrap text-[15px] leading-relaxed">
-                    {renderMessage(m.text)}
-                  </div>
-
-                  {m.role === "tutor" && m.citations?.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {m.citations.map((c, idx) => (
-                        <span key={idx} className="text-[9px] font-display uppercase tracking-widest rounded-full bg-ink/5 px-2 py-1 border border-ink/5">
-                          {c.external ? "External knowledge" : `Note p.${c.page}`}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {m.role === "tutor" && (
-                  <button onClick={() => copyToClipboard(m.id, m.text)} className="mt-1 ml-1 text-ink/30 hover:text-ink/60 transition-colors">
-                    {copiedId === m.id ? <Check size={14} className="text-sage" /> : <Copy size={14} />}
-                  </button>
-                )}
-              </div>
-            ))}
-            
-            {/* TYPING INDICATOR */}
-            {busy && (
-              <div className="flex items-start">
-                <div className="bg-white border border-ink/5 shadow-sm rounded-[20px] rounded-tl-sm px-4 py-3 flex gap-1 items-center h-10">
-                  <span className="w-1.5 h-1.5 bg-ink/40 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
-                  <span className="w-1.5 h-1.5 bg-ink/40 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
-                  <span className="w-1.5 h-1.5 bg-ink/40 rounded-full animate-bounce"></span>
-                </div>
-              </div>
-            )}
-            <div ref={chatEndRef} />
+      {/* CHAT AREA */}
+      <div className="flex-1 overflow-y-auto space-y-4 pb-28 scrollbar-none">
+        {(!thread?.messages || thread.messages.length === 0) && (
+          <div className="text-center mt-10 text-ink/40">
+            <Sparkles size={32} className="mx-auto mb-2 opacity-50" />
+            <p className="text-sm">Ask me anything.<br/>I can write code, explain notes, or just chat.</p>
           </div>
-
-          {/* INPUT AREA */}
-          <div className="absolute bottom-0 left-0 right-0 bg-off pt-2 pb-4">
-            <form className="flex gap-2 items-end" onSubmit={(e) => { e.preventDefault(); const q = text.trim(); if (!q) return; setText(""); void ask(q); }}>
+        )}
+        
+        {thread?.messages.map((m) => (
+          <div key={m.id} className={`flex flex-col ${m.role === "user" ? "items-end" : "items-start"}`}>
+            <div className={`relative max-w-[85%] rounded-[20px] px-4 py-3 ${
+              m.role === "user" 
+                ? "bg-ink text-off rounded-tr-sm" 
+                : "bg-white text-ink border border-ink/5 shadow-sm rounded-tl-sm"
+            }`}>
+              {m.role === "tutor" && (
+                <div className="flex items-center gap-1.5 mb-1 text-[10px] font-bold uppercase tracking-widest text-sage-deep">
+                  <Bot size={12} /> AI Tutor
+                </div>
+              )}
               
-              {/* VOICE NOTE BUTTON */}
-              <button 
-                type="button" 
-                onClick={toggleRecording} 
-                className={`press h-12 shrink-0 rounded-full grid place-items-center transition-all shadow-sm ${
-                  isRecording ? "bg-red-500 text-white animate-pulse w-24 px-4" : "bg-ink text-off w-12"
-                }`}
-              >
-                {isRecording ? (
-                  <div className="flex items-center gap-2">
-                    <Square size={12} fill="currentColor" />
-                    <span className="text-xs font-bold">{recordSeconds}s</span>
-                  </div>
-                ) : (
-                  <Mic size={18} />
-                )}
-              </button>
-
-              {/* TEXT INPUT */}
-              <div className="flex-1 bg-white rounded-3xl border border-ink/10 shadow-sm flex items-center min-h-[48px] px-4">
-                <input 
-                  value={text} 
-                  onChange={(e) => setText(e.target.value)} 
-                  disabled={isRecording || isLiveCall}
-                  placeholder={isRecording ? "Recording voice note..." : isLiveCall ? "Live call active..." : "Ask anything..."} 
-                  className="w-full bg-transparent outline-none text-[15px] disabled:opacity-50" 
-                />
+              <div className="whitespace-pre-wrap text-[15px] leading-relaxed">
+                {renderMessage(m.text)}
               </div>
-              
-              {/* SEND BUTTON */}
-              <button 
-                disabled={isRecording || isLiveCall || !text.trim()} 
-                className="press h-12 w-12 shrink-0 rounded-full bg-terra text-ink grid place-items-center shadow-md disabled:opacity-50 disabled:bg-ink/10 disabled:text-ink/30 transition-all"
-              >
-                <Send size={18} />
+            </div>
+
+            {m.role === "tutor" && (
+              <button onClick={() => copyToClipboard(m.id, m.text)} className="mt-1 ml-1 text-ink/30 hover:text-ink/60 transition-colors">
+                {copiedId === m.id ? <Check size={14} className="text-sage" /> : <Copy size={14} />}
               </button>
-            </form>
+            )}
           </div>
-        </>
-      )}
+        ))}
+        
+        {busy && (
+          <div className="flex items-start">
+            <div className="bg-white border border-ink/5 shadow-sm rounded-[20px] rounded-tl-sm px-4 py-3 flex gap-1 items-center h-10">
+              <span className="w-1.5 h-1.5 bg-ink/40 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+              <span className="w-1.5 h-1.5 bg-ink/40 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+              <span className="w-1.5 h-1.5 bg-ink/40 rounded-full animate-bounce"></span>
+            </div>
+          </div>
+        )}
+        <div ref={chatEndRef} />
+      </div>
+
+      {/* INPUT AREA */}
+      <div className="absolute bottom-0 left-0 right-0 bg-off pt-2 pb-4">
+        <form className="flex gap-2 items-end" onSubmit={(e) => { e.preventDefault(); const q = text.trim(); if (!q) return; setText(""); void ask(q); }}>
+          
+          <button 
+            type="button" 
+            onClick={toggleRecording} 
+            className={`press h-12 shrink-0 rounded-full grid place-items-center transition-all shadow-sm ${
+              isRecording ? "bg-red-500 text-white animate-pulse w-24 px-4" : "bg-ink text-off w-12"
+            }`}
+          >
+            {isRecording ? (
+              <div className="flex items-center gap-2">
+                <Square size={12} fill="currentColor" />
+                <span className="text-xs font-bold">{recordSeconds}s</span>
+              </div>
+            ) : (
+              <Mic size={18} />
+            )}
+          </button>
+
+          <div className="flex-1 bg-white rounded-3xl border border-ink/10 shadow-sm flex items-center min-h-[48px] px-4">
+            <input 
+              value={text} 
+              onChange={(e) => setText(e.target.value)} 
+              disabled={isRecording || isLiveCall}
+              placeholder={isRecording ? "Recording..." : isLiveCall ? "Live call..." : "Type a message..."} 
+              className="w-full bg-transparent outline-none text-[15px] disabled:opacity-50" 
+            />
+          </div>
+          
+          <button 
+            disabled={isRecording || isLiveCall || !text.trim()} 
+            className="press h-12 w-12 shrink-0 rounded-full bg-terra text-ink grid place-items-center shadow-md disabled:opacity-50 disabled:bg-ink/10 disabled:text-ink/30 transition-all"
+          >
+            <Send size={18} />
+          </button>
+        </form>
+      </div>
     </div>
   );
 }
