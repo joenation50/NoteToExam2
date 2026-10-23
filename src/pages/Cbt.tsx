@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ChevronLeft, CheckCircle2, XCircle, Timer, Award, RefreshCw } from "lucide-react";
 import { Seo } from "../components/Seo";
@@ -16,11 +16,15 @@ export function Cbt() {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [showResult, setShowResult] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
+  
+  // Track when the test started for the database
+  const startTimeRef = useRef<number>(Date.now());
 
   // Initialize timer (1 minute per question)
   useEffect(() => {
     if (pack && !showResult) {
       setTimeLeft(pack.questions.length * 60);
+      startTimeRef.current = Date.now();
     }
   }, [pack, showResult]);
 
@@ -69,13 +73,19 @@ export function Cbt() {
       if (answers[q.id] === q.answer) score++;
     });
 
-    if (me) {
-      // FIX: Removed 'createdAt' from the saveAttempt call
+    if (me && pack) {
+      // FIX: Added startedAt, finishedAt, and mapped the answers object correctly
       saveAttempt({
         ownerId: me.id,
         setId: pack.id,
         score,
         total: questions.length,
+        startedAt: startTimeRef.current,
+        finishedAt: Date.now(),
+        answers: questions.reduce((acc, q) => {
+          if (answers[q.id]) acc[q.id] = answers[q.id];
+          return acc;
+        }, {} as Record<string, string>)
       });
       toast("Test submitted successfully.", "ok");
     }
@@ -143,7 +153,7 @@ export function Cbt() {
         </div>
 
         <div className="flex gap-3 mt-8">
-          <button onClick={() => { setShowResult(false); setCurrentIndex(0); setAnswers({}); }} className="press flex-1 bg-white border border-ink/10 text-ink font-display font-bold py-4 rounded-2xl shadow-sm flex items-center justify-center gap-2">
+          <button onClick={() => { setShowResult(false); setCurrentIndex(0); setAnswers({}); startTimeRef.current = Date.now(); }} className="press flex-1 bg-white border border-ink/10 text-ink font-display font-bold py-4 rounded-2xl shadow-sm flex items-center justify-center gap-2">
             <RefreshCw size={18} /> Retake
           </button>
           <button onClick={() => nav("/app/library")} className="press flex-1 bg-ink text-off font-display font-bold py-4 rounded-2xl shadow-lg">
