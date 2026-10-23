@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { motion } from "framer-motion";
+import { motion, type Variants } from "framer-motion"; // Import Variants
 import { 
   User, School, BookOpen, GraduationCap, 
   CheckCircle2, LogOut, Shield, 
@@ -17,18 +17,16 @@ export function Settings() {
   const [isSaving, setIsSaving] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
-  if (!me) return null;
-
-  // Handle Image Upload
+  // Handle Image Upload - FIXED: Using me?.id
   async function handleImageUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || !me) return;
     if (file.size > 5 * 1024 * 1024) return toast("Image too large. Max 5MB.", "err");
 
     setIsUploading(true);
     try {
       const storage = getStorage();
-      const imageRef = ref(storage, `avatars/${me.id}`);
+      const imageRef = ref(storage, `avatars/${me.id}`); // TypeScript is happy now
       
       await uploadBytes(imageRef, file);
       const downloadURL = await getDownloadURL(imageRef);
@@ -45,13 +43,14 @@ export function Settings() {
 
   async function handleSave(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (!me) return;
     setIsSaving(true);
     const fd = new FormData(e.currentTarget);
     const cleanUsername = username.trim().toLowerCase();
 
     try {
       await updateMe({
-        username: cleanUsername !== me?.username ? cleanUsername : undefined,
+        username: cleanUsername !== me.username ? cleanUsername : undefined,
         name: String(fd.get("name") || me.name),
         matric: String(fd.get("matric") || me.matric),
         school: String(fd.get("school") || me.school),
@@ -66,9 +65,18 @@ export function Settings() {
     }
   }
 
-  // Animation variants
-  const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.05 } } };
-  const item = { hidden: { opacity: 0, y: 15 }, show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 24 } } };
+  // Animation variants - FIXED: Added 'as const' to transition type
+  const container: Variants = { 
+    hidden: { opacity: 0 }, 
+    show: { opacity: 1, transition: { staggerChildren: 0.05 } } 
+  };
+  
+  const item: Variants = { 
+    hidden: { opacity: 0, y: 15 }, 
+    show: { opacity: 1, y: 0, transition: { type: "spring" as const, stiffness: 300, damping: 24 } } 
+  };
+
+  if (!me) return null; // This needs to stay after the hooks
 
   return (
     <motion.div 
@@ -83,17 +91,9 @@ export function Settings() {
         <h1 className="font-display text-3xl font-bold">Settings</h1>
       </div>
 
-      {/* ──────────────────────────────────────────────────── */}
       {/* PROFILE PICTURE UPLOAD */}
-      {/* ──────────────────────────────────────────────────── */}
       <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="flex flex-col items-center justify-center mb-6">
-        <input 
-          ref={fileRef} 
-          type="file" 
-          accept="image/*" 
-          className="hidden" 
-          onChange={handleImageUpload} 
-        />
+        <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
         
         <button 
           type="button"
@@ -109,7 +109,6 @@ export function Settings() {
             </div>
           )}
           
-          {/* Camera Overlay */}
           <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
             <Camera size={24} className="text-white" />
           </div>
@@ -128,7 +127,6 @@ export function Settings() {
       <form onSubmit={handleSave}>
         <motion.div variants={container} initial="hidden" animate="show" className="space-y-4">
           
-          {/* Username Box */}
           <motion.label variants={item} className="block bg-gradient-to-r from-sage/20 to-sage/5 border border-sage/30 p-4 rounded-3xl shadow-sm relative overflow-hidden">
             <span className="text-xs font-display uppercase tracking-widest text-sage-deep font-bold flex items-center gap-1">
               <CheckCircle2 size={12} /> Unique Username
@@ -144,7 +142,6 @@ export function Settings() {
             </div>
           </motion.label>
 
-          {/* Full Name */}
           <motion.label variants={item} className="block">
             <span className="text-xs font-display uppercase tracking-widest text-ink/40 ml-1">Full Name</span>
             <div className="relative mt-1">
@@ -153,7 +150,6 @@ export function Settings() {
             </div>
           </motion.label>
 
-          {/* Matric */}
           <motion.label variants={item} className="block">
             <span className="text-xs font-display uppercase tracking-widest text-ink/40 ml-1">Matric Number</span>
             <div className="relative mt-1">
@@ -162,7 +158,6 @@ export function Settings() {
             </div>
           </motion.label>
 
-          {/* School */}
           <motion.label variants={item} className="block">
             <span className="text-xs font-display uppercase tracking-widest text-ink/40 ml-1">School</span>
             <div className="relative mt-1">
@@ -171,7 +166,6 @@ export function Settings() {
             </div>
           </motion.label>
 
-          {/* Course & Stage */}
           <motion.div variants={item} className="grid grid-cols-2 gap-3">
             <label className="block">
               <span className="text-xs font-display uppercase tracking-widest text-ink/40 ml-1">Course</span>
@@ -203,7 +197,6 @@ export function Settings() {
         </motion.div>
       </form>
 
-      {/* Status Card & Logout (Same as before) */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className="mt-8 bg-gradient-to-br from-ink to-gray-800 rounded-3xl p-5 text-off shadow-xl relative overflow-hidden">
         <div className="absolute -right-4 -top-4 opacity-10"><Shield size={100} /></div>
         <h3 className="font-display font-bold text-lg mb-4 flex items-center gap-2"><Shield size={18} className="text-sage" /> Account Status</h3>
