@@ -17,14 +17,19 @@ export function Tutor() {
   const [progress, setProgress] = useState("");
   const [params] = useSearchParams();
   const noteId = params.get("note");
-  const notes = db.notes.filter((n) => n.ownerId === me?.id);
+  
+  // SAFETY FIX: Added || [] so it doesn't crash if db.notes is undefined
+  const notes = (db.notes || []).filter((n) => n.ownerId === me?.id);
   const note = notes.find((n) => n.id === noteId) || notes[0] || null;
-  const set = db.sets.find((s) => s.noteId === note?.id);
+  
+  // SAFETY FIX: Added || [] here as well
+  const set = (db.sets || []).find((s) => s.noteId === note?.id);
   const theory = set?.questions?.filter((q) => q.format === "theory") || [];
 
   const thread = useMemo(() => {
     if (!me) return null;
-    return db.threads.find((x) => x.ownerId === me.id && x.noteId === (note?.id ?? null)) ?? null;
+    // SAFETY FIX: Added || [] here as well
+    return (db.threads || []).find((x) => x.ownerId === me.id && x.noteId === (note?.id ?? null)) ?? null;
   }, [me, note?.id, db.threads]);
 
   const [text, setText] = useState("");
